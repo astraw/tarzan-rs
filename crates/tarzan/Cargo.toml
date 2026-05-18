@@ -5,7 +5,11 @@ edition = "2024"
 
 [dependencies]
 anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tar.workspace = true
 zstd.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+zstd.workspace = true

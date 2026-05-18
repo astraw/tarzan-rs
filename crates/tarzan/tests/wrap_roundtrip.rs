@@ -47,7 +47,8 @@ fn wrap_roundtrips_tar_bytes_exactly() {
 
 #[test]
 fn wrap_writes_identity_skippable_frame_prefix() {
-    let source_tar = b"ustar-bytes";
+    // Two 512-byte zero blocks = a valid empty tar archive.
+    let source_tar = vec![0u8; 1024];
     let mut wrapped = Vec::new();
     tarzan::wrap(
         Cursor::new(source_tar.as_slice()),
@@ -56,12 +57,14 @@ fn wrap_writes_identity_skippable_frame_prefix() {
     )
     .expect("wrap should succeed");
 
+    // Identity frame layout: magic(4) + size(4) + "TRZN"(4) + frame_type(1) + version(1)
     let expected_magic = tarzan::format::identity::SKIPPABLE_FRAME_MAGIC.to_le_bytes();
-    assert!(wrapped.len() >= 13);
+    assert!(wrapped.len() >= 14);
     assert_eq!(&wrapped[0..4], expected_magic.as_slice());
-    assert_eq!(&wrapped[4..8], (5u32).to_le_bytes().as_slice());
+    assert_eq!(&wrapped[4..8], (6u32).to_le_bytes().as_slice());
     assert_eq!(&wrapped[8..12], b"TRZN");
-    assert_eq!(wrapped[12], tarzan::format::identity::IDENTITY_VERSION_V1);
+    assert_eq!(wrapped[12], tarzan::format::FRAME_TYPE_IDENTITY);
+    assert_eq!(wrapped[13], tarzan::format::identity::IDENTITY_VERSION_V1);
 
     let decompressed =
         zstd::stream::decode_all(Cursor::new(wrapped)).expect("zstd decode should succeed");

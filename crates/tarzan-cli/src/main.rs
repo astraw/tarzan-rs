@@ -1,3 +1,4 @@
+mod cmd_list;
 mod cmd_wrap;
 
 use std::path::PathBuf;
@@ -28,6 +29,12 @@ enum Commands {
 
         #[arg(long = "level", default_value_t = 3)]
         level: i32,
+    },
+    List {
+        archive: PathBuf,
+
+        #[arg(short = 'l', long = "long")]
+        long_format: bool,
     },
 }
 
@@ -77,5 +84,9 @@ fn main() -> Result<()> {
             chunk_size,
             level,
         } => cmd_wrap::run(input.as_deref(), output.as_deref(), chunk_size, level),
+        Commands::List {
+            archive,
+            long_format,
+        } => cmd_list::run(&archive, long_format),
     }
 }
