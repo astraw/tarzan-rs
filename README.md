@@ -386,6 +386,72 @@ contributors.
 
 ---
 
+## Design decisions
+
+### TOC sidecar mode (considered, deferred)
+
+A natural extension of the embedded TOC is to also serialize it as a standalone file
+(e.g. `archive.tar.toc`) that accompanies a plain `.tar` — enabling random access
+without the zstd wrapper, including for tape workflows. This is intentionally
+deferred from v1.
+
+Why deferred:
+
+- *Drift.* Sidecar files get separated from their data through copy, move, or
+  transfer. A stale sidecar fails silently unless every read verifies a whole-tar
+  hash, which is an O(n) scan that partly defeats the point of having an index.
+- *Schema bifurcation.* Per-member offsets mean different things in embedded mode
+  (compressed chunk offsets) vs. sidecar mode (uncompressed tar byte offsets). The
+  format would have to express "this field is valid only in mode X" rules and
+  ship two parsing paths.
+- *Crowded prior art.* [ratarmount](https://github.com/mxmlnkn/ratarmount) already
+  ships a SQLite-based tar index. Users who want random access to plain tar have a
+  deployed solution; introducing a competing format needs a stronger motivation
+  than "we could."
+- *Pitch dilution.* tarzan's value proposition is "drop-in seekable `.tar.zst`,
+  standard tools still work." A sidecar mode reframes tarzan as a generic tar
+  index format and pulls it into a different and more crowded design space.
+- *Tape is not really solved by a TOC file alone.* Useful tape random access needs
+  blocking-factor and (for multi-volume) volume-boundary metadata, not just member
+  offsets. Claiming tape support without that would be misleading.
+
+**Forward-compatibility reservations.** The v1 TOC schema is nevertheless designed
+so a sidecar variant remains feasible later without breaking v1 readers:
+
+- Every member entry carries `tar_offset` (uncompressed byte offset of the member
+  header in the tar stream). This is independently useful for verification and is
+  the field any future sidecar would need.
+- A top-level `target` field (default `"embedded"`) is reserved. Readers must
+  reject unknown values, so adding `"sidecar"` later is not a breaking change.
+- Top-level `tar_sha256` and `tar_size` are reserved as optional fields, to be
+  populated by future sidecars so readers can detect drift loudly rather than
+  silently using stale offsets.
+
+No file extension or on-disk sidecar layout is specified at this time — once
+documented, it has to be supported.
+
+### Why not GNU tar's `--index-file`
+
+`tar --index-file=FILE` is sometimes proposed as the natural sidecar format, but it
+is the wrong reference point. It redirects the `-v` listing to a file — bare paths
+at `-v`, `ls -l`-style lines at `-vv`:
+
+```
+drwxr-xr-x andrew/wheel      0 2026-05-18 16:29 ./
+-rw-r--r-- andrew/wheel     10 2026-05-18 16:29 ./b.txt
+-rw-r--r-- andrew/wheel      6 2026-05-18 16:29 ./sub/c.txt
+```
+
+There are no byte offsets, no checksums, no schema, no versioning, and no extension
+hook. The file tells you *what* is in the archive, not *where*, so it cannot serve
+as a seek index. Reusing the format would either ship a sidecar that does not
+actually enable seeking, or extend it past the point of any compatibility with GNU
+tar. [ratarmount](https://github.com/mxmlnkn/ratarmount)'s SQLite index is the
+closest existing format that actually solves the random-access problem and is the
+better reference if a sidecar mode is ever revisited.
+
+---
+
 ## Contributing
 
 Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) before
