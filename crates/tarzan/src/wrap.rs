@@ -2,7 +2,7 @@ use std::io::{Read, Write};
 
 use anyhow::{Result, bail};
 
-use crate::io;
+use crate::{format::identity, io};
 
 #[derive(Debug, Clone)]
 pub struct WrapOptions {
@@ -31,10 +31,12 @@ impl WrapOptions {
     }
 }
 
-pub fn wrap<R: Read, W: Write>(mut input: R, output: W, opts: WrapOptions) -> Result<()> {
+pub fn wrap<R: Read, W: Write>(mut input: R, mut output: W, opts: WrapOptions) -> Result<()> {
     if !io::is_nonzero(opts.chunk_size) {
         bail!("chunk size must be greater than zero");
     }
+
+    output.write_all(&identity::identity_frame_v1())?;
 
     let mut encoder = zstd::stream::write::Encoder::new(output, opts.level)?;
     std::io::copy(&mut input, &mut encoder)?;

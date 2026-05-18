@@ -44,3 +44,26 @@ fn wrap_roundtrips_tar_bytes_exactly() {
         zstd::stream::decode_all(Cursor::new(wrapped)).expect("zstd decode should succeed");
     assert_eq!(decompressed, source_tar);
 }
+
+#[test]
+fn wrap_writes_identity_skippable_frame_prefix() {
+    let source_tar = b"ustar-bytes";
+    let mut wrapped = Vec::new();
+    tarzan::wrap(
+        Cursor::new(source_tar.as_slice()),
+        &mut wrapped,
+        tarzan::WrapOptions::default(),
+    )
+    .expect("wrap should succeed");
+
+    let expected_magic = tarzan::format::identity::SKIPPABLE_FRAME_MAGIC.to_le_bytes();
+    assert!(wrapped.len() >= 13);
+    assert_eq!(&wrapped[0..4], expected_magic.as_slice());
+    assert_eq!(&wrapped[4..8], (5u32).to_le_bytes().as_slice());
+    assert_eq!(&wrapped[8..12], b"TRZN");
+    assert_eq!(wrapped[12], tarzan::format::identity::IDENTITY_VERSION_V1);
+
+    let decompressed =
+        zstd::stream::decode_all(Cursor::new(wrapped)).expect("zstd decode should succeed");
+    assert_eq!(decompressed, source_tar);
+}
