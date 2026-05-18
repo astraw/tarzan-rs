@@ -45,7 +45,33 @@ pub fn wrap<R: Read, W: Write>(mut input: R, mut output: W, opts: WrapOptions) -
         .read_to_end(&mut raw_tar)
         .context("failed to read input tar stream")?;
 
-    let toc_members_partial = parse_tar_entries(&raw_tar)?;
+    let entries = parse_tar_entries(&raw_tar)?;
+
+    // Compute the byte slice of raw_tar that belongs to each entry's chunk.
+    // Each chunk starts where the previous one ended, so extension-header bytes
+    // (PAX, GNU long-name) are included at the front of the chunk for the entry
+    // they precede.  The final chunk covers any trailing bytes (end-of-archive
+    // zero blocks) that follow the last entry.
+    let chunks: Vec<(usize, usize)> = {
+        let mut out = Vec::with_capacity(entries.len() + 1);
+        let mut prev_end = 0usize;
+        for entry in &entries {
+            let header_pos = entry.tar_offset as usize;
+            let data_blocks = entry.size.div_ceil(512) as usize * 512;
+            let entry_end = (header_pos + 512 + data_blocks).min(raw_tar.len());
+            out.push((prev_end, entry_end));
+            prev_end = entry_end;
+        }
+        // Trailing chunk: end-of-archive marker and any padding.
+        if prev_end < raw_tar.len() {
+            out.push((prev_end, raw_tar.len()));
+        }
+        // Empty archive: write the whole buffer as one (non-member) chunk.
+        if out.is_empty() {
+            out.push((0, raw_tar.len()));
+        }
+        out
+    };
 
     let id_frame = identity::identity_frame_v1();
     output
@@ -53,30 +79,42 @@ pub fn wrap<R: Read, W: Write>(mut input: R, mut output: W, opts: WrapOptions) -
         .context("failed to write identity frame")?;
     let mut pos = id_frame.len() as u64;
 
-    let compressed_offset = pos;
-    let compressed_size = {
-        let mut counting = CountingWriter::new(&mut output);
-        let mut encoder = zstd::stream::write::Encoder::new(&mut counting, opts.level)
-            .context("failed to create zstd encoder")?;
-        encoder
-            .write_all(&raw_tar)
-            .context("failed to compress tar data")?;
-        encoder.finish().context("failed to finish zstd frame")?;
-        counting.bytes_written()
-    };
-    pos += compressed_size;
-    let _ = pos;
+    // Compress each chunk as an independent zstd frame and record its location.
+    // Trailing/padding chunks (index >= entries.len()) have no TOC member.
+    let mut member_chunks: Vec<Option<ChunkInfo>> = vec![None; entries.len()];
 
-    let chunk = ChunkInfo {
-        compressed_offset,
-        compressed_size,
-        uncompressed_size: raw_tar.len() as u64,
-    };
+    for (i, &(start, end)) in chunks.iter().enumerate() {
+        let chunk_bytes = &raw_tar[start..end];
+        if chunk_bytes.is_empty() {
+            continue;
+        }
+        let compressed_offset = pos;
+        let compressed_size = {
+            let mut counting = CountingWriter::new(&mut output);
+            let mut encoder = zstd::stream::write::Encoder::new(&mut counting, opts.level)
+                .context("failed to create zstd encoder")?;
+            encoder
+                .write_all(chunk_bytes)
+                .context("failed to compress chunk")?;
+            encoder.finish().context("failed to finish zstd frame")?;
+            counting.bytes_written()
+        };
+        pos += compressed_size;
 
-    let members = toc_members_partial
+        if i < entries.len() {
+            member_chunks[i] = Some(ChunkInfo {
+                compressed_offset,
+                compressed_size,
+                uncompressed_size: chunk_bytes.len() as u64,
+            });
+        }
+    }
+
+    let members: Vec<TocMember> = entries
         .into_iter()
-        .map(|m| TocMember {
-            chunks: vec![chunk.clone()],
+        .zip(member_chunks)
+        .map(|(m, chunk)| TocMember {
+            chunks: chunk.into_iter().collect(),
             ..m
         })
         .collect();
@@ -94,7 +132,7 @@ pub fn wrap<R: Read, W: Write>(mut input: R, mut output: W, opts: WrapOptions) -
     Ok(())
 }
 
-/// Parses tar entries from `raw_tar` and returns partial `TocMember`s (no `chunks` yet).
+/// Parses tar entries from `raw_tar`, returning partial `TocMember`s (no `chunks`).
 fn parse_tar_entries(raw_tar: &[u8]) -> Result<Vec<TocMember>> {
     let mut archive = tar::Archive::new(Cursor::new(raw_tar));
     let mut members = Vec::new();
@@ -129,7 +167,7 @@ fn parse_tar_entries(raw_tar: &[u8]) -> Result<Vec<TocMember>> {
             mtime,
             tar_offset,
             link_target,
-            chunks: Vec::new(), // filled in by caller
+            chunks: Vec::new(),
         });
     }
 
