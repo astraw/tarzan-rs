@@ -1,0 +1,11 @@
+[workspace]
+members = ["crates/tarzan", "crates/tarzan-cli"]
+resolver = "3"
+
+[workspace.dependencies]
+anyhow = "1.0"
+clap = { version = "4.5", features = ["derive"] }
+tempfile = "3.12"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
+zstd = "0.13"

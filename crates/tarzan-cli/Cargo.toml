@@ -1,0 +1,19 @@
+[package]
+name = "tarzan-cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+tarzan = { path = "../tarzan" }
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+zstd.workspace = true
+
+[[bin]]
+name = "tarzan"
+path = "src/main.rs"
