@@ -237,10 +237,23 @@ A tarzan archive is a valid zstd stream consisting of three sections:
 ```
 
 The skippable frame magic number `0x184D2A54` is used for both the identity frame and
-the TOC frame. They are distinguished by position (first vs last) and by a type byte
-in the frame payload. All 16 values in the range `0x184D2A50`–`0x184D2A5F` are defined
-by the zstd spec as skippable; tarzan claims `0x184D2A54` (`T` for tarzan) for both
-its frames.
+the TOC frame; they are distinguished by position (first vs last) and by a type byte
+in the frame payload.
+
+The zstd spec defines any value in `0x184D2A50`–`0x184D2A5F` as a skippable frame and
+assigns no meaning to the low nibble. Producers may use any value in the range, and
+per the spec other tools may legally use the same magic number — so tarzan-aware
+readers identify tarzan frames via the `TRZN` ASCII identifier at the start of the
+payload, not by the magic number alone.
+
+The specific value `0x184D2A54` was chosen because (1) it avoids `0x184D2A5E`, which
+the [zstd seekable format extension][seekable] uses, and (2) zstd frames are
+little-endian on disk, so `0x184D2A54` is written as the byte sequence `54 2A 4D 18`
+— the first byte of every tarzan archive is ASCII `T`, which then continues into the
+`TRZN` payload identifier eight bytes later. A hex dump of any tarzan archive begins
+with a literal `T`.
+
+[seekable]: https://github.com/facebook/zstd/blob/dev/contrib/seekable_format/zstd_seekable_compression_format.md
 
 ### TOC schema
 
