@@ -47,6 +47,12 @@ enum Commands {
         /// Zstd compression level (1 = fastest, 22 = best).
         #[arg(long = "level", default_value_t = 3)]
         level: i32,
+
+        /// List each member to stderr after wrapping (tar's `-cvf`). Only
+        /// effective when output is a file; for stdout/pipes the listing
+        /// is suppressed since the archive can't be re-read.
+        #[arg(short = 'v', long = "verbose")]
+        verbose: bool,
     },
 
     /// List archive contents using only the embedded TOC.
@@ -94,6 +100,12 @@ enum Commands {
         /// every member.
         #[arg(value_name = "PATH")]
         path: Option<String>,
+
+        /// Print an `OK` line for every successfully-verified member.
+        /// Without this flag, verify is silent on success and only
+        /// reports mismatches.
+        #[arg(short = 'v', long = "verbose")]
+        verbose: bool,
     },
 }
 
@@ -147,13 +159,24 @@ fn main() -> Result<()> {
             file,
             chunk_size,
             level,
+            verbose,
         } => {
             let input = resolve_stream(input);
             let output = resolve_stream(file);
-            cmd_wrap::run(input.as_deref(), output.as_deref(), chunk_size, level)
+            cmd_wrap::run(
+                input.as_deref(),
+                output.as_deref(),
+                chunk_size,
+                level,
+                verbose,
+            )
         }
         Commands::List { file, verbose } => cmd_list::run(&file, verbose),
         Commands::Cat { file, path } => cmd_cat::run(&file, &path),
-        Commands::Verify { file, path } => cmd_verify::run(&file, path.as_deref()),
+        Commands::Verify {
+            file,
+            path,
+            verbose,
+        } => cmd_verify::run(&file, path.as_deref(), verbose),
     }
 }

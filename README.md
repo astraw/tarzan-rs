@@ -119,7 +119,14 @@ git archive HEAD | tarzan wrap -f release.tar.zst
 
 # Remote backup
 ssh user@host "tar -cf - /data" | tarzan wrap -f backup.tar.zst
+
+# Verbose: list each member to stderr after wrapping
+tar -cf - ./dir | tarzan wrap -v -f archive.tar.zst
 ```
+
+For safety, `wrap` refuses to write the binary archive directly to a
+terminal: if `-f` is omitted and stdout is a TTY, it errors out. Pipe
+the output, redirect to a file, or pass `-f`.
 
 ### `tarzan create` — create an archive from files
 
@@ -217,12 +224,18 @@ Identity frame:  TRZN v1
 
 ### `tarzan verify` — verify chunk checksums
 
+Silent on success by default; exits non-zero on mismatch. Pass `-v`
+to also print an `OK` line per verified member.
+
 ```sh
 # Verify all chunk SHA-256s
 tarzan verify -f archive.tar.zst
 
 # Verify a specific file
 tarzan verify -f archive.tar.zst src/main.rs
+
+# Show per-member OK lines
+tarzan verify -v -f archive.tar.zst
 ```
 
 ---

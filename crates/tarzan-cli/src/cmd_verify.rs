@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{Result, bail};
 use tarzan::{TarzanReader, VerifyStatus};
 
-pub fn run(archive: &Path, target_path: Option<&str>) -> Result<()> {
+pub fn run(archive: &Path, target_path: Option<&str>, verbose: bool) -> Result<()> {
     let reader = TarzanReader::open(archive)?;
 
     let records = match target_path {
@@ -18,7 +18,9 @@ pub fn run(archive: &Path, target_path: Option<&str>) -> Result<()> {
         match &record.status {
             VerifyStatus::Ok => {
                 any_checksum = true;
-                println!("OK  {}", record.path);
+                if verbose {
+                    println!("OK  {}", record.path);
+                }
             }
             VerifyStatus::Mismatch { expected, actual } => {
                 any_checksum = true;
