@@ -3,9 +3,11 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow, bail};
+use filetime::FileTime;
 use glob::Pattern;
 use tracing::warn;
 
+use crate::filter::PathFilter;
 use crate::format::toc::{EntryType, TocMember};
 use crate::reader::TarzanReader;
 
@@ -46,14 +48,19 @@ impl TarzanReader {
         F: FnMut(&str),
     {
         let includes =
-            compile_patterns(&opts.includes).context("invalid include/filter pattern")?;
+            PathFilter::new(&opts.includes).context("invalid include/filter pattern")?;
         let excludes = compile_patterns(&opts.excludes).context("invalid exclude pattern")?;
 
         fs::create_dir_all(dest)
             .with_context(|| format!("creating destination {}", dest.display()))?;
 
+        // Directory mtimes have to be applied after all children are
+        // written, because creating a child file or subdir bumps the
+        // parent's mtime back to "now". Collect them here, apply at end.
+        let mut deferred_dir_times: Vec<(PathBuf, FileTime)> = Vec::new();
+
         for member in self.members() {
-            if !member_included(&member.path, &opts.includes, &includes) {
+            if !includes.matches(&member.path) {
                 continue;
             }
             if member_excluded(&member.path, &excludes) {
@@ -64,22 +71,36 @@ impl TarzanReader {
                 _ => continue,
             };
             let target = dest.join(&rel);
-            self.extract_one(member, &target)?;
+            self.extract_one(member, &target, &mut deferred_dir_times)?;
             on_extracted(&member.path);
         }
+
+        for (path, mtime) in deferred_dir_times {
+            filetime::set_file_mtime(&path, mtime).with_context(|| {
+                format!("setting mtime on directory {}", path.display())
+            })?;
+        }
+
         Ok(())
     }
 
-    fn extract_one(&self, member: &TocMember, target: &Path) -> Result<()> {
+    fn extract_one(
+        &self,
+        member: &TocMember,
+        target: &Path,
+        deferred_dir_times: &mut Vec<(PathBuf, FileTime)>,
+    ) -> Result<()> {
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("creating {}", parent.display()))?;
         }
+        let mtime = FileTime::from_unix_time(member.mtime, 0);
         match member.entry_type {
             EntryType::Dir => {
                 fs::create_dir_all(target)
                     .with_context(|| format!("creating dir {}", target.display()))?;
                 set_unix_mode(target, member.mode)?;
+                deferred_dir_times.push((target.to_path_buf(), mtime));
             }
             EntryType::File => {
                 let file = File::create(target)
@@ -88,6 +109,8 @@ impl TarzanReader {
                 self.extract_member(&member.path, &mut writer)?;
                 writer.flush()?;
                 set_unix_mode(target, member.mode)?;
+                filetime::set_file_mtime(target, mtime)
+                    .with_context(|| format!("setting mtime on {}", target.display()))?;
             }
             EntryType::Symlink => {
                 let link_target = member
@@ -95,6 +118,12 @@ impl TarzanReader {
                     .as_deref()
                     .ok_or_else(|| anyhow!("symlink {} has no link_target", member.path))?;
                 create_symlink(link_target, target)?;
+                // Use mtime for both atime and mtime; the TOC doesn't
+                // record atime separately, and most filesystems don't
+                // accurately preserve it anyway.
+                filetime::set_symlink_file_times(target, mtime, mtime).with_context(|| {
+                    format!("setting mtime on symlink {}", target.display())
+                })?;
             }
             EntryType::HardLink => {
                 warn!(path = %member.path, "skipping hard-link extraction (not yet supported)");
@@ -121,20 +150,6 @@ fn compile_patterns(raw: &[String]) -> Result<Vec<Pattern>> {
 
 fn normalize_for_match(s: &str) -> &str {
     s.trim_start_matches("./").trim_end_matches('/')
-}
-
-fn member_included(path: &str, raw: &[String], compiled: &[Pattern]) -> bool {
-    if raw.is_empty() {
-        return true;
-    }
-    let p = normalize_for_match(path);
-    for (r, g) in raw.iter().zip(compiled) {
-        let r = normalize_for_match(r);
-        if p == r || p.starts_with(&format!("{r}/")) || g.matches(p) {
-            return true;
-        }
-    }
-    false
 }
 
 fn member_excluded(path: &str, compiled: &[Pattern]) -> bool {
@@ -226,21 +241,6 @@ mod tests {
         assert!(normalize_member_path("./a", 1).unwrap().is_none());
         assert!(normalize_member_path("./a/b", 2).unwrap().is_none());
         assert!(normalize_member_path("./a/b", 5).unwrap().is_none());
-    }
-
-    #[test]
-    fn includes_match_exact_prefix_and_glob() {
-        let raw = vec!["src/".to_owned(), "*.toml".to_owned()];
-        let compiled = compile_patterns(&raw).unwrap();
-        assert!(member_included("src/main.rs", &raw, &compiled));
-        assert!(member_included("./src/main.rs", &raw, &compiled));
-        assert!(member_included("Cargo.toml", &raw, &compiled));
-        assert!(!member_included("README.md", &raw, &compiled));
-    }
-
-    #[test]
-    fn includes_empty_means_match_all() {
-        assert!(member_included("anything", &[], &[]));
     }
 
     #[test]

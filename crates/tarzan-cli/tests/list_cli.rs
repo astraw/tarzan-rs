@@ -261,6 +261,83 @@ fn list_json_emits_parseable_array() {
 }
 
 #[test]
+fn list_filter_by_directory_prefix() {
+    let temp = tempdir().expect("tempdir");
+    let archive = wrap_fixture(&temp);
+
+    let output = Command::new(tarzan_bin())
+        .args(["list", "-f"])
+        .arg(&archive)
+        .arg("src/")
+        .output()
+        .expect("list with filter");
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.lines().all(|l| l.is_empty() || l.contains("src")),
+        "every line should match src/ prefix:\n{stdout}"
+    );
+    assert!(
+        stdout.lines().any(|l| l.contains("main.rs")),
+        "expected src/main.rs in filtered listing"
+    );
+    assert!(
+        !stdout.lines().any(|l| l.ends_with("README.txt")),
+        "README.txt should be filtered out"
+    );
+}
+
+#[test]
+fn list_filter_by_glob_pattern() {
+    let temp = tempdir().expect("tempdir");
+    let archive = wrap_fixture(&temp);
+
+    let output = Command::new(tarzan_bin())
+        .args(["list", "-f"])
+        .arg(&archive)
+        .arg("*.txt")
+        .output()
+        .expect("list with glob");
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.lines().any(|l| l.ends_with("README.txt")),
+        "README.txt should match *.txt"
+    );
+    assert!(
+        !stdout.lines().any(|l| l.ends_with("main.rs")),
+        "main.rs should NOT match *.txt"
+    );
+}
+
+#[test]
+fn list_json_respects_filter() {
+    let temp = tempdir().expect("tempdir");
+    let archive = wrap_fixture(&temp);
+
+    let output = Command::new(tarzan_bin())
+        .args(["list", "--json", "-f"])
+        .arg(&archive)
+        .arg("src/")
+        .output()
+        .expect("list --json src/");
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    let arr = parsed.as_array().expect("top-level array");
+    for entry in arr {
+        let path = entry.get("path").unwrap().as_str().unwrap();
+        assert!(
+            path.contains("src"),
+            "JSON entry leaked through filter: {path}"
+        );
+    }
+}
+
+#[test]
 fn list_verbose_and_json_are_mutually_exclusive() {
     let temp = tempdir().expect("tempdir");
     let archive = wrap_fixture(&temp);

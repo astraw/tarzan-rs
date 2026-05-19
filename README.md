@@ -176,7 +176,12 @@ tarzan t -f archive.tar.zst
 # Symlink and hard-link entries show their target as `path -> target`.
 tarzan list -v -f archive.tar.zst
 
-# Machine-readable JSON
+# Filter by directory prefix, exact path, or shell glob (positional args)
+tarzan list -f archive.tar.zst src/
+tarzan list -f archive.tar.zst '*.toml'
+tarzan list -v -f archive.tar.zst src/main.rs Cargo.toml
+
+# Machine-readable JSON (respects positional filters)
 tarzan list --json -f archive.tar.zst
 ```
 
@@ -253,13 +258,15 @@ tarzan x -v -f archive.tar.zst
 ```
 
 Restored on extract: file contents, directory hierarchy, Unix permission
-bits, and symlinks (Unix only). Hard links, character/block devices, and
-FIFOs are currently skipped with a warning; mtime restoration is also
-not yet implemented.
+bits, symlinks (Unix only), and mtime on files, symlinks, and directories.
+Directory mtimes are applied in a deferred pass after all children are
+written, so creating a child doesn't bump the parent's timestamp back.
+Hard links, character/block devices, and FIFOs are currently skipped
+with a warning.
 
 For workflows that need full fidelity — hard links, device files, FIFOs,
-mtime preservation, xattrs/ACLs, sparse files — fall back to standard
-tooling. Every tarzan archive is a valid zstd stream:
+xattrs/ACLs, sparse files — fall back to standard tooling. Every tarzan
+archive is a valid zstd stream:
 
 ```sh
 zstd -d archive.tar.zst | tar x

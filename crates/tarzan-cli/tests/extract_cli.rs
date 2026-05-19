@@ -135,6 +135,67 @@ fn extract_filter_directory_prefix() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn extract_restores_file_mtime() {
+    use std::os::unix::fs::MetadataExt;
+
+    // Build a tree whose file mtimes are set to a known timestamp, archive
+    // it, extract it, and confirm the round-tripped mtimes match.
+    let temp = tempdir().expect("tempdir");
+    let src = temp.path().join("src");
+    fs::create_dir_all(src.join("inner")).unwrap();
+    fs::write(src.join("inner/file.txt"), b"hi").unwrap();
+
+    let stamped: i64 = 1_700_000_000; // 2023-11-14 22:13:20 UTC, far enough back to detect drift
+    let ft = filetime::FileTime::from_unix_time(stamped, 0);
+    filetime::set_file_mtime(src.join("inner/file.txt"), ft).unwrap();
+    filetime::set_file_mtime(src.join("inner"), ft).unwrap();
+
+    let tar_path = temp.path().join("input.tar");
+    let status = Command::new("tar")
+        .arg("-cf")
+        .arg(&tar_path)
+        .arg("-C")
+        .arg(&src)
+        .arg(".")
+        .status()
+        .expect("tar");
+    assert!(status.success());
+
+    let archive = temp.path().join("a.tar.zst");
+    let status = Command::new(tarzan_bin())
+        .arg("wrap")
+        .arg(&tar_path)
+        .arg("-f")
+        .arg(&archive)
+        .status()
+        .expect("wrap");
+    assert!(status.success());
+
+    let dest = temp.path().join("out");
+    let status = Command::new(tarzan_bin())
+        .args(["extract", "-f"])
+        .arg(&archive)
+        .arg("-C")
+        .arg(&dest)
+        .status()
+        .expect("extract");
+    assert!(status.success());
+
+    let file_mtime = fs::metadata(dest.join("inner/file.txt")).unwrap().mtime();
+    assert_eq!(
+        file_mtime, stamped,
+        "file mtime should be restored to the stamped value"
+    );
+
+    let dir_mtime = fs::metadata(dest.join("inner")).unwrap().mtime();
+    assert_eq!(
+        dir_mtime, stamped,
+        "directory mtime should be restored to the stamped value (applied after children written)"
+    );
+}
+
 #[test]
 fn extract_exclude_pattern() {
     let temp = tempdir().expect("tempdir");

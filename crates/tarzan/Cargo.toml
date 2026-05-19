@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow.workspace = true
+filetime.workspace = true
 glob.workspace = true
 serde.workspace = true
 serde_json.workspace = true

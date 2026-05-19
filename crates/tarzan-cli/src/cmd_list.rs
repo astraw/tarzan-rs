@@ -2,20 +2,28 @@ use std::path::Path;
 
 use anyhow::Result;
 use tarzan::TarzanReader;
+use tarzan::filter::PathFilter;
 use tarzan::format::toc::{EntryType, TocMember};
 
 use crate::util::format_size;
 
-pub fn run(archive: &Path, verbose: bool, json: bool) -> Result<()> {
+pub fn run(archive: &Path, verbose: bool, json: bool, paths: &[String]) -> Result<()> {
     let reader = TarzanReader::open(archive)?;
+    let filter = PathFilter::new(paths)?;
+
+    let members: Vec<&TocMember> = reader
+        .members()
+        .iter()
+        .filter(|m| filter.matches(&m.path))
+        .collect();
 
     if json {
-        let out = serde_json::to_string_pretty(reader.members())?;
+        let out = serde_json::to_string_pretty(&members)?;
         println!("{out}");
         return Ok(());
     }
 
-    for member in reader.members() {
+    for member in members {
         if verbose {
             let type_char = type_char_for(&member.entry_type);
             let mode = format_mode(type_char, member.mode);

@@ -80,6 +80,12 @@ enum Commands {
         /// target, and chunk locations.
         #[arg(long = "json")]
         json: bool,
+
+        /// Restrict the listing to these paths or directory prefixes;
+        /// omit to list everything. Matching is by exact path,
+        /// directory-prefix, or shell glob.
+        #[arg(value_name = "PATH")]
+        paths: Vec<String>,
     },
 
     /// Stream a single member from the archive to stdout.
@@ -239,7 +245,8 @@ fn main() -> Result<()> {
             file,
             verbose,
             json,
-        } => cmd_list::run(&file, verbose, json),
+            paths,
+        } => cmd_list::run(&file, verbose, json, &paths),
         Commands::Cat { file, path } => cmd_cat::run(&file, &path),
         Commands::Extract {
             file,
