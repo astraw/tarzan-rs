@@ -1,4 +1,5 @@
 mod cmd_cat;
+mod cmd_extract;
 mod cmd_list;
 mod cmd_verify;
 mod cmd_wrap;
@@ -84,6 +85,48 @@ enum Commands {
         /// Path of the member within the archive.
         #[arg(value_name = "PATH")]
         path: String,
+    },
+
+    /// Extract archive members onto the filesystem.
+    ///
+    /// Decompresses only the chunks needed for the requested members
+    /// (or all of them, if no positional paths are given). Refuses to
+    /// extract absolute paths or paths containing `..` so extraction
+    /// stays inside the destination directory.
+    #[command(visible_alias = "x")]
+    Extract {
+        /// Archive to extract from.
+        #[arg(short = 'f', long = "file", value_name = "ARCHIVE")]
+        file: PathBuf,
+
+        /// Destination directory (created if missing). Defaults to the
+        /// current working directory.
+        #[arg(
+            short = 'C',
+            long = "directory",
+            value_name = "DIR",
+            default_value = "."
+        )]
+        directory: PathBuf,
+
+        /// Drop N leading path components from each archive entry,
+        /// like `tar --strip-components`.
+        #[arg(long = "strip-components", value_name = "N", default_value_t = 0)]
+        strip_components: usize,
+
+        /// Skip members matching this shell-glob pattern. Repeatable.
+        #[arg(long = "exclude", value_name = "PATTERN")]
+        exclude: Vec<String>,
+
+        /// Print each member to stderr as it is extracted.
+        #[arg(short = 'v', long = "verbose")]
+        verbose: bool,
+
+        /// Restrict extraction to these paths or directory prefixes;
+        /// omit to extract everything. Matching is by exact path,
+        /// directory-prefix, or shell glob.
+        #[arg(value_name = "PATH")]
+        paths: Vec<String>,
     },
 
     /// Verify SHA-256 checksums recorded in the TOC.
@@ -173,6 +216,21 @@ fn main() -> Result<()> {
         }
         Commands::List { file, verbose } => cmd_list::run(&file, verbose),
         Commands::Cat { file, path } => cmd_cat::run(&file, &path),
+        Commands::Extract {
+            file,
+            directory,
+            strip_components,
+            exclude,
+            verbose,
+            paths,
+        } => cmd_extract::run(
+            &file,
+            &directory,
+            strip_components,
+            exclude,
+            paths,
+            verbose,
+        ),
         Commands::Verify {
             file,
             path,

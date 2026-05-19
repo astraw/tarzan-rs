@@ -178,8 +178,12 @@ README.md                    9.4 KB   2024-11-03 15:01
 
 ### `tarzan extract` — extract files
 
+Aliased as `tarzan x` (tar style). Refuses to write members whose path is
+absolute or contains `..`, so extraction always stays inside the
+destination directory.
+
 ```sh
-# Extract everything
+# Extract everything to the current directory
 tarzan extract -f archive.tar.zst
 
 # Extract to a specific directory
@@ -190,7 +194,21 @@ tarzan extract -f archive.tar.zst src/main.rs src/lib.rs
 
 # Extract a directory subtree
 tarzan extract -f archive.tar.zst src/
+
+# Drop leading path components, like `tar --strip-components`
+tarzan extract -f archive.tar.zst -C build --strip-components 1
+
+# Skip members by shell-glob pattern (repeatable)
+tarzan extract -f archive.tar.zst --exclude '*.o' --exclude 'target/*'
+
+# Print each member as it is extracted
+tarzan x -v -f archive.tar.zst
 ```
+
+Restored on extract: file contents, directory hierarchy, Unix permission
+bits, and symlinks (Unix only). Hard links, character/block devices, and
+FIFOs are currently skipped with a warning; mtime restoration is also
+not yet implemented.
 
 ### `tarzan cat` — stream a single file to stdout
 
