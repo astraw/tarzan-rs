@@ -128,21 +128,37 @@ For safety, `wrap` refuses to write the binary archive directly to a
 terminal: if `-f` is omitted and stdout is a TTY, it errors out. Pipe
 the output, redirect to a file, or pass `-f`.
 
-### `tarzan create` — create an archive from files
+### Creating archives from files
+
+tarzan does not implement its own filesystem walker. Use the system
+`tar` to produce the tar stream, and pipe it into `tarzan wrap`:
 
 ```sh
-# Create from a directory
-tarzan create -f archive.tar.zst ./my-project
+# A whole directory
+tar -cf - ./my-project | tarzan wrap -f my-project.tar.zst
 
 # Multiple paths
-tarzan create -f archive.tar.zst ./src ./docs ./README.md
+tar -cf - ./src ./docs ./README.md | tarzan wrap -f bundle.tar.zst
 
-# Write to stdout
-tarzan create -f - ./my-project > archive.tar.zst
+# Change source directory, like `tar -C`
+tar -cf - -C ./build . | tarzan wrap -f build.tar.zst
 
-# Exclude patterns
-tarzan create -f archive.tar.zst ./my-project --exclude '*.o' --exclude target/
+# Exclude patterns (tar's own --exclude)
+tar -cf - --exclude='*.o' --exclude='target/*' ./my-project \
+    | tarzan wrap -f archive.tar.zst
+
+# git archive integration
+git archive HEAD | tarzan wrap -f release.tar.zst
+
+# Remote backup
+ssh user@host "tar -cf - /data" | tarzan wrap -f backup.tar.zst
 ```
+
+This composition is deliberate: real tar handles hard links, sparse
+files, xattrs, ACLs, long path/link names (PAX/GNU extensions), and
+device files correctly. Re-implementing that surface inside tarzan would
+either replicate tar poorly or shell out to it anyway, so we lean on
+the canonical `tar | tarzan wrap` pipeline instead.
 
 ### `tarzan list` — list contents
 
@@ -381,9 +397,13 @@ skips a few of its older ergonomics:
   letter on the root command. tarzan uses subcommands (`tarzan wrap`,
   `tarzan list`, ...) for better discoverability and shell tab-completion;
   tar-style short aliases (`tarzan t`) cover the muscle-memory case.
-- **Renaming `wrap`.** `wrap` reads an existing tar stream and adds the tarzan
-  envelope. There is no tar verb for this, and reusing one (e.g. `create`)
-  would mislead about what reads the file system.
+- **A separate `create` verb / filesystem walker.** `wrap` reads an existing
+  tar stream and adds the tarzan envelope; the canonical archive-creation
+  workflow is `tar -cf - ... | tarzan wrap -f out.tar.zst`. We do not
+  re-implement `tar -c` ourselves — real tar already handles hard links,
+  sparse files, xattrs, long path names, and device files correctly, and
+  a partial in-tree walker would silently mishandle those long-tail
+  cases. See [Creating archives from files](#creating-archives-from-files).
 - **Compression-format flags (`-z`, `-j`, `-J`, `--zstd`).** A tarzan archive
   is always zstd, so a compression selector would only ever take one value.
 - **Mandatory archive flag with no positional fallback.** GNU tar accepts
