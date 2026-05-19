@@ -4,10 +4,10 @@ use anyhow::Result;
 use tarzan::format::toc::EntryType;
 use tarzan::TarzanReader;
 
-pub fn run(archive: &Path, long_format: bool) -> Result<()> {
+pub fn run(archive: &Path, verbose: bool) -> Result<()> {
     let reader = TarzanReader::open(archive)?;
     for member in reader.members() {
-        if long_format {
+        if verbose {
             let type_char = match member.entry_type {
                 EntryType::Dir => 'd',
                 EntryType::Symlink => 'l',

@@ -12,14 +12,19 @@ doing so discards the indexing and seekability that tarzan provides.
 
 ```sh
 # Wrap any existing tar stream — drop-in for gzip or zstd
-tar -cf - ./my-project | tarzan wrap > my-project.tar.zst
+tar -cf - ./my-project | tarzan wrap -f my-project.tar.zst
 
 # List contents instantly — no decompression, reads TOC only
-tarzan list my-project.tar.zst
+tarzan list -f my-project.tar.zst
 
 # Extract a single file — decompresses only the relevant chunks
-tarzan cat my-project.tar.zst src/main.rs
+tarzan cat -f my-project.tar.zst src/main.rs
 ```
+
+The CLI follows tar's flag conventions where they overlap: `-f`/`--file`
+names the archive, `-v` is verbose, `-C` selects a directory. Subcommands
+have tar-style short aliases (`tarzan t` for `list`). See [What we don't
+copy from tar](#what-we-dont-copy-from-tar) for the bits we leave behind.
 
 ---
 
@@ -88,29 +93,32 @@ Silicon) are available on the [releases page](https://github.com/astraw/tarzan-r
 ### `tarzan wrap` — compress an existing tar stream
 
 The primary entry point for pipeline use. Reads a raw tar stream from stdin (or a
-file) and writes a tarzan-formatted `.tar.zst` to stdout (or a file).
+file) and writes a tarzan-formatted `.tar.zst` to stdout (or `-f`).
+
+The input tar is a positional argument; the output archive is `-f`/`--file`,
+mirroring `tar -cf out.tar`. Use `-` (or omit) for stdin/stdout.
 
 ```sh
 # From stdin to stdout
 tar -cf - ./dir | tarzan wrap > archive.tar.zst
 
-# From a file
-tarzan wrap --input archive.tar --output archive.tar.zst
+# From a file to a file
+tarzan wrap archive.tar -f archive.tar.zst
 
 # With explicit output path
-tar -cf - ./dir | tarzan wrap -o archive.tar.zst
+tar -cf - ./dir | tarzan wrap -f archive.tar.zst
 
 # Control chunk size (default: 4MB)
-tar -cf - ./dir | tarzan wrap --chunk-size 1M > archive.tar.zst
+tar -cf - ./dir | tarzan wrap --chunk-size 1M -f archive.tar.zst
 
 # Set zstd compression level (default: 3)
-tar -cf - ./dir | tarzan wrap --level 9 > archive.tar.zst
+tar -cf - ./dir | tarzan wrap --level 9 -f archive.tar.zst
 
 # git archive integration
-git archive HEAD | tarzan wrap > release.tar.zst
+git archive HEAD | tarzan wrap -f release.tar.zst
 
 # Remote backup
-ssh user@host "tar -cf - /data" | tarzan wrap > backup.tar.zst
+ssh user@host "tar -cf - /data" | tarzan wrap -f backup.tar.zst
 ```
 
 ### `tarzan create` — create an archive from files
@@ -132,18 +140,22 @@ tarzan create -f archive.tar.zst ./my-project --exclude '*.o' --exclude target/
 ### `tarzan list` — list contents
 
 Reads only the TOC skippable frame. Fast regardless of archive size.
+Aliased as `tarzan t` (tar style) and `tarzan ls`.
 
 ```sh
-tarzan list archive.tar.zst
+tarzan list -f archive.tar.zst
 
-# Long format (permissions, owner, size, mtime)
-tarzan list -l archive.tar.zst
+# Long format (permissions, size, mtime) — equivalent to `tar -tvf`
+tarzan list -v -f archive.tar.zst
+
+# tar-style short alias
+tarzan t -f archive.tar.zst
 
 # Filter by path prefix
-tarzan list archive.tar.zst src/
+tarzan list -f archive.tar.zst src/
 
 # Machine-readable JSON
-tarzan list --json archive.tar.zst
+tarzan list --json -f archive.tar.zst
 ```
 
 Example output:
@@ -178,16 +190,16 @@ tarzan extract -f archive.tar.zst src/
 Seeks directly to the file using the TOC; decompresses only its chunks.
 
 ```sh
-tarzan cat archive.tar.zst src/main.rs
+tarzan cat -f archive.tar.zst src/main.rs
 
 # Pipe into another tool
-tarzan cat archive.tar.zst data/records.csv | awk -F, '{print $2}'
+tarzan cat -f archive.tar.zst data/records.csv | awk -F, '{print $2}'
 ```
 
 ### `tarzan info` — show archive metadata
 
 ```sh
-tarzan info archive.tar.zst
+tarzan info -f archive.tar.zst
 ```
 
 ```
@@ -207,10 +219,10 @@ Identity frame:  TRZN v1
 
 ```sh
 # Verify all chunk SHA-256s
-tarzan verify archive.tar.zst
+tarzan verify -f archive.tar.zst
 
 # Verify a specific file
-tarzan verify archive.tar.zst src/main.rs
+tarzan verify -f archive.tar.zst src/main.rs
 ```
 
 ---
@@ -313,6 +325,32 @@ A magic pattern for tarzan archives is distributed with this repository at
 file -m contrib/tarzan.magic archive.tar.zst
 # archive.tar.zst: tarzan archive v1, 1847 members
 ```
+
+---
+
+## What we don't copy from tar
+
+tarzan borrows tar's flag conventions where they overlap, but deliberately
+skips a few of its older ergonomics:
+
+- **Bundled short flags (`-xvf`).** tar lets you mash mode and option letters
+  together as a single argument; modern argument parsers don't, and the form
+  is widely considered tar's most arcane bit. tarzan accepts `-x -v -f` style
+  spacing only.
+- **Mode-flag entry point (`tar -cf`).** tar selects its operation with a flag
+  letter on the root command. tarzan uses subcommands (`tarzan wrap`,
+  `tarzan list`, ...) for better discoverability and shell tab-completion;
+  tar-style short aliases (`tarzan t`) cover the muscle-memory case.
+- **Renaming `wrap`.** `wrap` reads an existing tar stream and adds the tarzan
+  envelope. There is no tar verb for this, and reusing one (e.g. `create`)
+  would mislead about what reads the file system.
+- **Compression-format flags (`-z`, `-j`, `-J`, `--zstd`).** A tarzan archive
+  is always zstd, so a compression selector would only ever take one value.
+- **Mandatory archive flag with no positional fallback.** GNU tar accepts
+  `tar tf archive.tar` only because of bundling; without bundling, an archive
+  always needs `-f`. tarzan uses `-f`/`--file` uniformly, but with subcommands
+  the form stays consistent rather than depending on whether you remembered
+  to merge letters.
 
 ---
 

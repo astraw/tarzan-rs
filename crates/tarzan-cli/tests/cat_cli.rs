@@ -33,9 +33,9 @@ fn wrap_fixture(temp: &tempfile::TempDir) -> PathBuf {
     let archive_path = temp.path().join("archive.tar.zst");
     create_tar_from_fixture(&tar_path);
     let status = Command::new(tarzan_bin())
-        .args(["wrap", "--input"])
+        .arg("wrap")
         .arg(&tar_path)
-        .arg("--output")
+        .arg("-f")
         .arg(&archive_path)
         .status()
         .expect("failed to run tarzan wrap");
@@ -49,7 +49,7 @@ fn cat_extracts_readme_txt() {
     let archive = wrap_fixture(&temp);
 
     let output = Command::new(tarzan_bin())
-        .arg("cat")
+        .args(["cat", "-f"])
         .arg(&archive)
         .arg("./README.txt")
         .output()
@@ -71,7 +71,7 @@ fn cat_extracts_src_main_rs() {
     let archive = wrap_fixture(&temp);
 
     let output = Command::new(tarzan_bin())
-        .arg("cat")
+        .args(["cat", "-f"])
         .arg(&archive)
         .arg("./src/main.rs")
         .output()
@@ -93,7 +93,7 @@ fn cat_missing_path_exits_nonzero() {
     let archive = wrap_fixture(&temp);
 
     let status = Command::new(tarzan_bin())
-        .arg("cat")
+        .args(["cat", "-f"])
         .arg(&archive)
         .arg("no/such/file.txt")
         .status()
@@ -108,7 +108,7 @@ fn verify_exits_zero_on_fresh_archive() {
     let archive = wrap_fixture(&temp);
 
     let output = Command::new(tarzan_bin())
-        .arg("verify")
+        .args(["verify", "-f"])
         .arg(&archive)
         .output()
         .expect("failed to run tarzan verify");
@@ -126,7 +126,7 @@ fn verify_single_file_exits_zero() {
     let archive = wrap_fixture(&temp);
 
     let output = Command::new(tarzan_bin())
-        .arg("verify")
+        .args(["verify", "-f"])
         .arg(&archive)
         .arg("./README.txt")
         .output()

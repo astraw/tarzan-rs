@@ -33,9 +33,9 @@ fn wrap_fixture(temp: &tempfile::TempDir) -> PathBuf {
     let archive_path = temp.path().join("archive.tar.zst");
     create_tar_from_fixture(&tar_path);
     let status = Command::new(tarzan_bin())
-        .args(["wrap", "--input"])
+        .arg("wrap")
         .arg(&tar_path)
-        .arg("--output")
+        .arg("-f")
         .arg(&archive_path)
         .status()
         .expect("failed to run tarzan wrap");
@@ -49,7 +49,7 @@ fn list_exits_zero_and_prints_paths() {
     let archive = wrap_fixture(&temp);
 
     let output = Command::new(tarzan_bin())
-        .arg("list")
+        .args(["list", "-f"])
         .arg(&archive)
         .output()
         .expect("failed to run tarzan list");
@@ -75,12 +75,12 @@ fn list_long_format_shows_extra_columns() {
     let archive = wrap_fixture(&temp);
 
     let output = Command::new(tarzan_bin())
-        .args(["list", "-l"])
+        .args(["list", "-v", "-f"])
         .arg(&archive)
         .output()
-        .expect("failed to run tarzan list -l");
+        .expect("failed to run tarzan list -v");
 
-    assert!(output.status.success(), "tarzan list -l failed");
+    assert!(output.status.success(), "tarzan list -v failed");
 
     let stdout = String::from_utf8(output.stdout).expect("stdout should be UTF-8");
     // Long format lines contain a year (mtime) and a size field.
@@ -114,7 +114,7 @@ fn list_paths_match_tar_tf() {
         .collect();
 
     let list_output = Command::new(tarzan_bin())
-        .arg("list")
+        .args(["list", "-f"])
         .arg(&archive)
         .output()
         .expect("failed to run tarzan list");
@@ -135,7 +135,7 @@ fn list_paths_match_tar_tf() {
 fn list_nonexistent_archive_exits_nonzero() {
     let temp = tempdir().expect("failed to create tempdir");
     let status = Command::new(tarzan_bin())
-        .arg("list")
+        .args(["list", "-f"])
         .arg(temp.path().join("does_not_exist.tar.zst"))
         .status()
         .expect("failed to run tarzan list");

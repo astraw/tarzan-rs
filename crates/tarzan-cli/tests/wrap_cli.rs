@@ -68,9 +68,8 @@ fn wrap_input_to_output_roundtrips() {
 
     let status = Command::new(tarzan_bin())
         .arg("wrap")
-        .arg("--input")
         .arg(&tar_path)
-        .arg("--output")
+        .arg("-f")
         .arg(&out_path)
         .status()
         .expect("failed to run tarzan wrap");
