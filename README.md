@@ -226,6 +226,20 @@ bits, and symlinks (Unix only). Hard links, character/block devices, and
 FIFOs are currently skipped with a warning; mtime restoration is also
 not yet implemented.
 
+For workflows that need full fidelity — hard links, device files, FIFOs,
+mtime preservation, xattrs/ACLs, sparse files — fall back to standard
+tooling. Every tarzan archive is a valid zstd stream:
+
+```sh
+zstd -d archive.tar.zst | tar x
+# or
+tar --zstd -xf archive.tar.zst
+```
+
+You give up tarzan's random-access seeking but get real tar's full
+coverage of the long tail. The trade is: `tarzan extract` is the fast
+path for the common case; `tar --zstd -xf` is the complete path.
+
 ### `tarzan cat` — stream a single file to stdout
 
 Seeks directly to the file using the TOC; decompresses only its chunks.
@@ -236,6 +250,17 @@ tarzan cat -f archive.tar.zst src/main.rs
 # Pipe into another tool
 tarzan cat -f archive.tar.zst data/records.csv | awk -F, '{print $2}'
 ```
+
+Only regular-file entries work — hard-link entries reference another
+member rather than holding their own bytes, and will error. For
+full-fidelity single-file extraction via standard tools:
+
+```sh
+tar --zstd -xOf archive.tar.zst path/in/archive
+```
+
+That path scans sequentially rather than seeking, but resolves hard
+links the way real tar does.
 
 ### `tarzan info` — show archive metadata
 
