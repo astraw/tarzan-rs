@@ -11,6 +11,10 @@ use crate::format::{self, toc::{EntryType, TocMember}};
 pub struct TarzanReader {
     path: PathBuf,
     members: Vec<TocMember>,
+    archive_size: u64,
+    toc_offset: u64,
+    toc_frame_size: u64,
+    identity_version: u8,
 }
 
 /// Result of verifying one chunk's stored SHA-256 checksum.
@@ -27,20 +31,50 @@ pub enum VerifyStatus {
 }
 
 impl TarzanReader {
-    /// Opens a tarzan archive and loads its TOC by scanning from the end of the file.
+    /// Opens a tarzan archive: validates the leading identity frame and
+    /// loads the TOC by scanning back from the end of the file.
     pub fn open(path: &Path) -> Result<Self> {
         let mut file =
             File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
-        let file_size = file
+        let archive_size = file
             .seek(SeekFrom::End(0))
             .context("failed to seek to end of archive")?;
-        let members = find_toc(&mut file, file_size)
+        let identity_version = read_identity_frame(&mut file)
+            .with_context(|| format!("invalid identity frame in {}", path.display()))?;
+        let toc = find_toc(&mut file, archive_size)
             .with_context(|| format!("no tarzan TOC found in {}", path.display()))?;
-        Ok(Self { path: path.to_owned(), members })
+        Ok(Self {
+            path: path.to_owned(),
+            members: toc.members,
+            archive_size,
+            toc_offset: toc.offset,
+            toc_frame_size: toc.frame_size,
+            identity_version,
+        })
     }
 
     pub fn members(&self) -> &[TocMember] {
         &self.members
+    }
+
+    /// Total size of the archive file on disk, in bytes.
+    pub fn archive_size(&self) -> u64 {
+        self.archive_size
+    }
+
+    /// Byte offset of the TOC skippable frame from the start of the file.
+    pub fn toc_offset(&self) -> u64 {
+        self.toc_offset
+    }
+
+    /// Total size of the TOC skippable frame (8-byte header plus payload).
+    pub fn toc_frame_size(&self) -> u64 {
+        self.toc_frame_size
+    }
+
+    /// Version byte from the leading identity frame.
+    pub fn identity_version(&self) -> u8 {
+        self.identity_version
     }
 
     /// Extracts the file data for `target_path` to `out`.
@@ -151,7 +185,13 @@ fn sha256_hex(data: &[u8]) -> String {
 /// Real TOCs are small (JSON + zstd), so 8 MB is a generous upper bound.
 const MAX_SCAN_BYTES: u64 = 8 * 1024 * 1024;
 
-fn find_toc(file: &mut File, file_size: u64) -> Result<Vec<TocMember>> {
+struct TocLocation {
+    members: Vec<TocMember>,
+    offset: u64,
+    frame_size: u64,
+}
+
+fn find_toc(file: &mut File, file_size: u64) -> Result<TocLocation> {
     if file_size < 8 {
         bail!("file too small to be a tarzan archive");
     }
@@ -185,8 +225,33 @@ fn find_toc(file: &mut File, file_size: u64) -> Result<Vec<TocMember>> {
         }
         let toc = crate::format::toc::decode_toc_payload(payload)
             .context("failed to decode TOC frame")?;
-        return Ok(toc.members);
+        return Ok(TocLocation {
+            members: toc.members,
+            offset: scan_start + p as u64,
+            frame_size: 8 + payload_size as u64,
+        });
     }
 
     bail!("no tarzan TOC frame found")
+}
+
+/// Reads and validates the leading identity frame, returning its version byte.
+fn read_identity_frame(file: &mut File) -> Result<u8> {
+    file.seek(SeekFrom::Start(0))
+        .context("failed to seek to start of archive")?;
+    let mut header = [0u8; 8];
+    file.read_exact(&mut header)
+        .context("failed to read identity frame header")?;
+    let magic = u32::from_le_bytes(header[0..4].try_into().unwrap());
+    if magic != format::SKIPPABLE_FRAME_MAGIC {
+        bail!(
+            "not a tarzan archive: leading frame magic is {magic:#010x}, expected {:#010x}",
+            format::SKIPPABLE_FRAME_MAGIC
+        );
+    }
+    let payload_size = u32::from_le_bytes(header[4..8].try_into().unwrap()) as usize;
+    let mut payload = vec![0u8; payload_size];
+    file.read_exact(&mut payload)
+        .context("failed to read identity frame payload")?;
+    format::identity::decode(&payload)
 }

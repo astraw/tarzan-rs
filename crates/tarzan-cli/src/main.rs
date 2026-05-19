@@ -1,8 +1,10 @@
 mod cmd_cat;
 mod cmd_extract;
+mod cmd_info;
 mod cmd_list;
 mod cmd_verify;
 mod cmd_wrap;
+mod util;
 
 use std::path::PathBuf;
 
@@ -129,6 +131,17 @@ enum Commands {
         paths: Vec<String>,
     },
 
+    /// Print archive metadata: size, member count, compression ratio,
+    /// TOC location, identity-frame version.
+    ///
+    /// Reads only the TOC frame; runs in constant time regardless of
+    /// archive size.
+    Info {
+        /// Archive to inspect.
+        #[arg(short = 'f', long = "file", value_name = "ARCHIVE")]
+        file: PathBuf,
+    },
+
     /// Verify SHA-256 checksums recorded in the TOC.
     ///
     /// Decompresses each chunk and compares its SHA-256 against the value
@@ -214,6 +227,7 @@ fn main() -> Result<()> {
                 verbose,
             )
         }
+        Commands::Info { file } => cmd_info::run(&file),
         Commands::List { file, verbose } => cmd_list::run(&file, verbose),
         Commands::Cat { file, path } => cmd_cat::run(&file, &path),
         Commands::Extract {

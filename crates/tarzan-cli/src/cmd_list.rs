@@ -4,6 +4,8 @@ use anyhow::Result;
 use tarzan::format::toc::EntryType;
 use tarzan::TarzanReader;
 
+use crate::util::format_size;
+
 pub fn run(archive: &Path, verbose: bool) -> Result<()> {
     let reader = TarzanReader::open(archive)?;
     for member in reader.members() {
@@ -46,21 +48,6 @@ fn format_mode(type_char: char, mode: u32) -> String {
         s.push(if mode & bit != 0 { ch } else { '-' });
     }
     s
-}
-
-fn format_size(size: u64) -> String {
-    const KB: u64 = 1024;
-    const MB: u64 = 1024 * KB;
-    const GB: u64 = 1024 * MB;
-    if size >= GB {
-        format!("{:.1} GB", size as f64 / GB as f64)
-    } else if size >= MB {
-        format!("{:.1} MB", size as f64 / MB as f64)
-    } else if size >= KB {
-        format!("{:.1} KB", size as f64 / KB as f64)
-    } else {
-        format!("{size} B")
-    }
 }
 
 fn format_mtime(mtime: i64) -> String {

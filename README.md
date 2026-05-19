@@ -223,22 +223,31 @@ tarzan cat -f archive.tar.zst data/records.csv | awk -F, '{print $2}'
 
 ### `tarzan info` — show archive metadata
 
+Reads only the TOC frame, so it runs in constant time regardless of
+archive size.
+
 ```sh
 tarzan info -f archive.tar.zst
 ```
 
 ```
 Format:          tarzan v1
-Created:         2024-11-03 15:01:22 UTC
-Members:         1,847
-Uncompressed:    2.31 GB
-Compressed:      487 MB  (21.1%)
-Chunks:          4,203
-Chunk size:      4 MB (default)
-TOC size:        312 KB
-TOC offset:      487,204,816
+File:            archive.tar.zst
+Size:            487.2 MB
+Uncompressed:    2.3 GB
+Ratio:           21.1% (archive / uncompressed)
+Data frames:     486.4 MB (sum of compressed chunks)
+Members:         1847
+Chunks:          4203
+Avg chunk size:  574.5 KB (uncompressed)
 Identity frame:  TRZN v1
+TOC frame:       312.0 KB at offset 487204816
 ```
+
+Some fields the legacy README example referenced are intentionally
+omitted: the archive does not record a creation timestamp, and the
+chunk-size argument is a wrap-time tunable rather than archive metadata
+(use `Avg chunk size` as an observed proxy).
 
 ### `tarzan verify` — verify chunk checksums
 
