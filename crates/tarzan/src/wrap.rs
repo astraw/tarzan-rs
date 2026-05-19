@@ -1,6 +1,7 @@
 use std::io::{Cursor, Read, Write};
 
 use anyhow::{Context, Result, bail};
+use sha2::{Digest, Sha256};
 
 use crate::format::{
     identity,
@@ -102,10 +103,12 @@ pub fn wrap<R: Read, W: Write>(mut input: R, mut output: W, opts: WrapOptions) -
         pos += compressed_size;
 
         if i < entries.len() {
+            let sha256 = sha256_hex(chunk_bytes);
             member_chunks[i] = Some(ChunkInfo {
                 compressed_offset,
                 compressed_size,
                 uncompressed_size: chunk_bytes.len() as u64,
+                sha256: Some(sha256),
             });
         }
     }
@@ -172,6 +175,11 @@ fn parse_tar_entries(raw_tar: &[u8]) -> Result<Vec<TocMember>> {
     }
 
     Ok(members)
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    let hash = Sha256::digest(data);
+    hash.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 fn to_entry_type(t: tar::EntryType) -> EntryType {

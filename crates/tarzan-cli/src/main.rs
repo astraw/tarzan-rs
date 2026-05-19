@@ -1,4 +1,6 @@
+mod cmd_cat;
 mod cmd_list;
+mod cmd_verify;
 mod cmd_wrap;
 
 use std::path::PathBuf;
@@ -35,6 +37,20 @@ enum Commands {
 
         #[arg(short = 'l', long = "long")]
         long_format: bool,
+    },
+    /// Stream a single file from the archive to stdout.
+    Cat {
+        archive: PathBuf,
+
+        /// Path of the file within the archive.
+        path: String,
+    },
+    /// Verify SHA-256 checksums for all chunks (or a single file).
+    Verify {
+        archive: PathBuf,
+
+        /// Verify only this file; omit to verify the whole archive.
+        path: Option<String>,
     },
 }
 
@@ -88,5 +104,7 @@ fn main() -> Result<()> {
             archive,
             long_format,
         } => cmd_list::run(&archive, long_format),
+        Commands::Cat { archive, path } => cmd_cat::run(&archive, &path),
+        Commands::Verify { archive, path } => cmd_verify::run(&archive, path.as_deref()),
     }
 }

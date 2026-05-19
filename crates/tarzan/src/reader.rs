@@ -1,14 +1,29 @@
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
-use std::path::Path;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use sha2::{Digest, Sha256};
 
-use crate::format::{self, toc::TocMember};
+use crate::format::{self, toc::{EntryType, TocMember}};
 
 /// Reads a tarzan archive without decompressing the data frames.
 pub struct TarzanReader {
+    path: PathBuf,
     members: Vec<TocMember>,
+}
+
+/// Result of verifying one chunk's stored SHA-256 checksum.
+pub struct VerifyRecord {
+    pub path: String,
+    pub chunk_index: usize,
+    pub status: VerifyStatus,
+}
+
+pub enum VerifyStatus {
+    Ok,
+    Mismatch { expected: String, actual: String },
+    NoChecksum,
 }
 
 impl TarzanReader {
@@ -21,12 +36,114 @@ impl TarzanReader {
             .context("failed to seek to end of archive")?;
         let members = find_toc(&mut file, file_size)
             .with_context(|| format!("no tarzan TOC found in {}", path.display()))?;
-        Ok(Self { members })
+        Ok(Self { path: path.to_owned(), members })
     }
 
     pub fn members(&self) -> &[TocMember] {
         &self.members
     }
+
+    /// Extracts the file data for `target_path` to `out`.
+    ///
+    /// Seeks directly to the member's compressed chunk; decompresses only that chunk.
+    /// Returns an error if the path is not found or the member is not a regular file.
+    pub fn extract_member(&self, target_path: &str, out: &mut dyn Write) -> Result<()> {
+        let (member_idx, member) = self.members
+            .iter()
+            .enumerate()
+            .find(|(_, m)| m.path == target_path)
+            .ok_or_else(|| anyhow::anyhow!("path not found in archive: {target_path}"))?;
+
+        if !matches!(member.entry_type, EntryType::File) {
+            bail!("{target_path} is not a regular file");
+        }
+
+        let chunk = member.chunks.first()
+            .ok_or_else(|| anyhow::anyhow!("member has no chunks: {target_path}"))?;
+
+        // Chunks are contiguous in the raw tar stream. chunk_tar_start is the sum of
+        // uncompressed sizes of all chunks in all preceding members.
+        let chunk_tar_start: u64 = self.members[..member_idx]
+            .iter()
+            .flat_map(|m| m.chunks.iter())
+            .map(|c| c.uncompressed_size)
+            .sum();
+
+        // Skip past any extension headers before our entry header, then past the
+        // 512-byte tar header itself. What remains is the raw file data.
+        let data_offset = member.tar_offset - chunk_tar_start + 512;
+
+        let mut file = File::open(&self.path)
+            .with_context(|| format!("failed to open {}", self.path.display()))?;
+        file.seek(SeekFrom::Start(chunk.compressed_offset))
+            .context("failed to seek to chunk")?;
+
+        let mut decoder = zstd::stream::read::Decoder::new(&mut file)
+            .context("failed to create zstd decoder")?;
+
+        crate::io::skip_exact(&mut decoder, data_offset)
+            .context("failed to skip to file data in chunk")?;
+        crate::io::copy_exact(&mut decoder, out, member.size)
+            .context("failed to copy file data")?;
+
+        Ok(())
+    }
+
+    /// Verifies the SHA-256 checksum of every chunk in every member.
+    pub fn verify_all(&self) -> Result<Vec<VerifyRecord>> {
+        let mut file = File::open(&self.path)
+            .with_context(|| format!("failed to open {}", self.path.display()))?;
+        verify_members(&mut file, self.members.iter())
+    }
+
+    /// Verifies the SHA-256 checksums for the single member at `target_path`.
+    pub fn verify_member(&self, target_path: &str) -> Result<Vec<VerifyRecord>> {
+        let member = self.members
+            .iter()
+            .find(|m| m.path == target_path)
+            .ok_or_else(|| anyhow::anyhow!("path not found in archive: {target_path}"))?;
+        let mut file = File::open(&self.path)
+            .with_context(|| format!("failed to open {}", self.path.display()))?;
+        verify_members(&mut file, std::iter::once(member))
+    }
+}
+
+fn verify_members<'a>(
+    file: &mut File,
+    members: impl Iterator<Item = &'a TocMember>,
+) -> Result<Vec<VerifyRecord>> {
+    let mut results = Vec::new();
+    for member in members {
+        for (chunk_index, chunk) in member.chunks.iter().enumerate() {
+            let status = match &chunk.sha256 {
+                None => VerifyStatus::NoChecksum,
+                Some(expected) => {
+                    file.seek(SeekFrom::Start(chunk.compressed_offset))
+                        .with_context(|| format!("seek failed for chunk {chunk_index} of {}", member.path))?;
+                    let mut limited = (&mut *file).take(chunk.compressed_size);
+                    let decompressed = zstd::stream::decode_all(&mut limited)
+                        .with_context(|| format!("decompress failed for chunk {chunk_index} of {}", member.path))?;
+                    let actual = sha256_hex(&decompressed);
+                    if actual == *expected {
+                        VerifyStatus::Ok
+                    } else {
+                        VerifyStatus::Mismatch { expected: expected.clone(), actual }
+                    }
+                }
+            };
+            results.push(VerifyRecord {
+                path: member.path.clone(),
+                chunk_index,
+                status,
+            });
+        }
+    }
+    Ok(results)
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    let hash = Sha256::digest(data);
+    hash.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Maximum number of bytes read from the end of the file when scanning for the TOC.

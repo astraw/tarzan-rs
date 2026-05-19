@@ -45,6 +45,8 @@ pub struct ChunkInfo {
     pub compressed_offset: u64,
     pub compressed_size: u64,
     pub uncompressed_size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
 }
 
 /// Encodes a `TocFrame` as a tarzan skippable frame ready to append to an archive.
