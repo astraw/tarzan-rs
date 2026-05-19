@@ -145,6 +145,142 @@ fn list_nonexistent_archive_exits_nonzero() {
     );
 }
 
+#[test]
+fn list_verbose_shows_owner_group_column() {
+    let temp = tempdir().expect("failed to create tempdir");
+    let archive = wrap_fixture(&temp);
+
+    let output = Command::new(tarzan_bin())
+        .args(["list", "-v", "-f"])
+        .arg(&archive)
+        .output()
+        .expect("failed to run tarzan list -v");
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let readme_line = stdout
+        .lines()
+        .find(|l| l.contains("README.txt"))
+        .expect("README.txt line present");
+    // Owner column is `uid/gid` (numeric). Any line should match the
+    // pattern `digits/digits` between the mode and size columns.
+    assert!(
+        readme_line.split_whitespace().any(|f| {
+            f.split_once('/')
+                .is_some_and(|(a, b)| a.parse::<u64>().is_ok() && b.parse::<u64>().is_ok())
+        }),
+        "expected uid/gid column in: {readme_line}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn list_verbose_shows_symlink_target() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempdir().expect("tempdir");
+    let src = temp.path().join("src");
+    fs::create_dir(&src).unwrap();
+    fs::write(src.join("target.txt"), b"hi").unwrap();
+    symlink("target.txt", src.join("link.txt")).unwrap();
+
+    let tar_path = temp.path().join("input.tar");
+    let status = Command::new("tar")
+        .arg("-cf")
+        .arg(&tar_path)
+        .arg("-C")
+        .arg(&src)
+        .arg(".")
+        .status()
+        .expect("tar");
+    assert!(status.success());
+
+    let archive_path = temp.path().join("a.tar.zst");
+    let status = Command::new(tarzan_bin())
+        .arg("wrap")
+        .arg(&tar_path)
+        .arg("-f")
+        .arg(&archive_path)
+        .status()
+        .expect("wrap");
+    assert!(status.success());
+
+    let out = Command::new(tarzan_bin())
+        .args(["list", "-v", "-f"])
+        .arg(&archive_path)
+        .output()
+        .expect("list -v");
+    assert!(out.status.success());
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let link_line = stdout
+        .lines()
+        .find(|l| l.contains("link.txt"))
+        .expect("link.txt should be listed");
+    assert!(
+        link_line.contains("-> target.txt"),
+        "expected ` -> target.txt` in: {link_line}"
+    );
+    // Type char should be `l` for the symlink line.
+    assert!(
+        link_line.trim_start().starts_with('l'),
+        "expected symlink line to start with `l`: {link_line}"
+    );
+}
+
+#[test]
+fn list_json_emits_parseable_array() {
+    let temp = tempdir().expect("tempdir");
+    let archive = wrap_fixture(&temp);
+
+    let output = Command::new(tarzan_bin())
+        .args(["list", "--json", "-f"])
+        .arg(&archive)
+        .output()
+        .expect("list --json");
+    assert!(output.status.success(), "list --json failed");
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    let arr = parsed.as_array().expect("top-level array");
+    assert!(!arr.is_empty(), "expected non-empty member array");
+
+    let has_readme = arr.iter().any(|m| {
+        m.get("path")
+            .and_then(|p| p.as_str())
+            .is_some_and(|s| s.ends_with("README.txt"))
+    });
+    assert!(has_readme, "expected a README.txt entry in JSON output");
+
+    let first = &arr[0];
+    for key in ["path", "type", "size", "mode", "uid", "gid", "mtime"] {
+        assert!(
+            first.get(key).is_some(),
+            "JSON entry missing key `{key}`: {first}"
+        );
+    }
+}
+
+#[test]
+fn list_verbose_and_json_are_mutually_exclusive() {
+    let temp = tempdir().expect("tempdir");
+    let archive = wrap_fixture(&temp);
+
+    let output = Command::new(tarzan_bin())
+        .args(["list", "-v", "--json", "-f"])
+        .arg(&archive)
+        .output()
+        .expect("list -v --json");
+    assert!(
+        !output.status.success(),
+        "list -v --json should fail with a conflict error"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--verbose") && stderr.contains("--json"),
+        "expected clap conflict message, got: {stderr}"
+    );
+}
+
 // Ensure wrapping still roundtrips correctly after adding TOC.
 #[test]
 fn wrap_still_roundtrips_after_toc_added() {

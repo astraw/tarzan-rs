@@ -1,33 +1,55 @@
 use std::path::Path;
 
 use anyhow::Result;
-use tarzan::format::toc::EntryType;
 use tarzan::TarzanReader;
+use tarzan::format::toc::{EntryType, TocMember};
 
 use crate::util::format_size;
 
-pub fn run(archive: &Path, verbose: bool) -> Result<()> {
+pub fn run(archive: &Path, verbose: bool, json: bool) -> Result<()> {
     let reader = TarzanReader::open(archive)?;
+
+    if json {
+        let out = serde_json::to_string_pretty(reader.members())?;
+        println!("{out}");
+        return Ok(());
+    }
+
     for member in reader.members() {
         if verbose {
-            let type_char = match member.entry_type {
-                EntryType::Dir => 'd',
-                EntryType::Symlink => 'l',
-                EntryType::HardLink => 'h',
-                EntryType::CharDevice => 'c',
-                EntryType::BlockDevice => 'b',
-                EntryType::Fifo => 'p',
-                _ => '-',
-            };
+            let type_char = type_char_for(&member.entry_type);
             let mode = format_mode(type_char, member.mode);
+            let owner = format!("{}/{}", member.uid, member.gid);
             let size = format_size(member.size);
             let mtime = format_mtime(member.mtime);
-            println!("{mode}  {size:>10}  {mtime}  {}", member.path);
+            let path = format_path_with_link(member);
+            println!("{mode} {owner}  {size:>10}  {mtime}  {path}");
         } else {
             println!("{}", member.path);
         }
     }
     Ok(())
+}
+
+fn type_char_for(t: &EntryType) -> char {
+    match t {
+        EntryType::Dir => 'd',
+        EntryType::Symlink => 'l',
+        EntryType::HardLink => 'h',
+        EntryType::CharDevice => 'c',
+        EntryType::BlockDevice => 'b',
+        EntryType::Fifo => 'p',
+        EntryType::File | EntryType::Other => '-',
+    }
+}
+
+fn format_path_with_link(member: &TocMember) -> String {
+    match (&member.entry_type, &member.link_target) {
+        (EntryType::Symlink | EntryType::HardLink, Some(target)) => {
+            format!("{} -> {}", member.path, target)
+        }
+        _ => member.path.clone(),
+    }
 }
 
 fn format_mode(type_char: char, mode: u32) -> String {

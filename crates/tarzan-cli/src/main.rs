@@ -69,10 +69,17 @@ enum Commands {
         #[arg(short = 'f', long = "file", value_name = "ARCHIVE")]
         file: PathBuf,
 
-        /// Show permissions, size, and mtime in addition to the path,
-        /// like `tar -tvf`.
-        #[arg(short = 'v', long = "verbose")]
+        /// Show mode, owner/group, size, and mtime in addition to the
+        /// path, like `tar -tvf`. Symlink and hard-link entries show
+        /// their target as `path -> target`.
+        #[arg(short = 'v', long = "verbose", conflicts_with = "json")]
         verbose: bool,
+
+        /// Emit the TOC as a pretty-printed JSON array. Each entry
+        /// includes path, type, size, mode, uid/gid, mtime, link
+        /// target, and chunk locations.
+        #[arg(long = "json")]
+        json: bool,
     },
 
     /// Stream a single member from the archive to stdout.
@@ -228,7 +235,11 @@ fn main() -> Result<()> {
             )
         }
         Commands::Info { file } => cmd_info::run(&file),
-        Commands::List { file, verbose } => cmd_list::run(&file, verbose),
+        Commands::List {
+            file,
+            verbose,
+            json,
+        } => cmd_list::run(&file, verbose, json),
         Commands::Cat { file, path } => cmd_cat::run(&file, &path),
         Commands::Extract {
             file,

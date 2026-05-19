@@ -166,31 +166,62 @@ Reads only the TOC skippable frame. Fast regardless of archive size.
 Aliased as `tarzan t` (tar style) and `tarzan ls`.
 
 ```sh
+# Paths only, one per line
 tarzan list -f archive.tar.zst
-
-# Long format (permissions, size, mtime) — equivalent to `tar -tvf`
-tarzan list -v -f archive.tar.zst
 
 # tar-style short alias
 tarzan t -f archive.tar.zst
 
-# Filter by path prefix
-tarzan list -f archive.tar.zst src/
+# Long format: mode, owner/group, size, mtime, path — like `tar -tvf`.
+# Symlink and hard-link entries show their target as `path -> target`.
+tarzan list -v -f archive.tar.zst
 
 # Machine-readable JSON
 tarzan list --json -f archive.tar.zst
 ```
 
-Example output:
+Long-format output:
 ```
-src/main.rs                  4.2 KB   2024-11-03 14:22
-src/lib.rs                   12.1 KB  2024-11-03 14:22
-src/format/mod.rs            8.7 KB   2024-11-01 09:14
-src/format/toc.rs            6.3 KB   2024-11-01 09:14
-tests/roundtrip.rs           3.1 KB   2024-10-28 16:55
-Cargo.toml                   1.1 KB   2024-11-03 14:20
-README.md                    9.4 KB   2024-11-03 15:01
+drwxr-xr-x 1000/1000         0 B  2024-11-03 14:20  ./
+-rw-r--r-- 1000/1000      4.2 KB  2024-11-03 14:22  src/main.rs
+-rw-r--r-- 1000/1000     12.1 KB  2024-11-03 14:22  src/lib.rs
+lrwxrwxrwx 1000/1000         0 B  2024-11-03 14:22  src/current -> main.rs
+-rw-r--r-- 1000/1000      1.1 KB  2024-11-03 14:20  Cargo.toml
 ```
+
+Owner is shown numerically (`uid/gid`) rather than as resolved names —
+the TOC stores numbers, and resolving them against the *reader's*
+`/etc/passwd` would be misleading.
+
+`--json` emits the TOC as a pretty-printed JSON array. Each entry
+carries path, type, size, mode, uid, gid, mtime, optional link target,
+and chunk offsets:
+
+```json
+[
+  {
+    "path": "src/main.rs",
+    "type": "file",
+    "size": 4301,
+    "mode": 420,
+    "uid": 1000,
+    "gid": 1000,
+    "mtime": 1730643742,
+    "tar_offset": 1024,
+    "chunks": [
+      {
+        "compressed_offset": 1024,
+        "compressed_size": 1891,
+        "uncompressed_size": 4301,
+        "sha256": "e3b0c44298fc1c149afb..."
+      }
+    ]
+  }
+]
+```
+
+Pipe through `jq` to slice out fields you don't want (for example
+`jq 'map(del(.chunks))'`).
 
 ### `tarzan extract` — extract files
 
