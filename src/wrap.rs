@@ -41,7 +41,7 @@ impl WrapOptions {
 /// A sliding window of raw tar bytes captured from the input stream.
 ///
 /// Holds the bytes from absolute offset `base` up to whatever the tar reader
-/// has consumed so far. Chunks are sliced out of this buffer and the consumed
+/// has consumed so far. Frames are sliced out of this buffer and the consumed
 /// prefix is drained, so peak memory stays bounded by the configured chunk
 /// size rather than by the size of the whole archive.
 struct Window {
@@ -89,6 +89,15 @@ impl<R: Read> Read for CapturingReader<R> {
     }
 }
 
+/// A member parsed but not yet emitted: its trailing padding is only captured
+/// once the *next* entry's header has been read.
+enum Pending {
+    /// A small member, awaiting placement into the current group.
+    Small { idx: usize, region_size: u64 },
+    /// A large member whose final (sub-chunk-size) frame is not yet emitted.
+    Large { idx: usize, entry_end: u64 },
+}
+
 /// Wraps an existing tar stream into a tarzan archive.
 ///
 /// The input is processed as a stream: member data is compressed and written
@@ -100,12 +109,11 @@ pub fn wrap<R: Read, W: Write>(input: R, output: W, opts: WrapOptions) -> Result
 
 /// Like [`wrap`], but invokes `on_member` with each member's TOC entry as soon
 /// as that member has been fully compressed. Useful for progress reporting.
-pub fn wrap_with<R, W, F>(
-    input: R,
-    mut output: W,
-    opts: WrapOptions,
-    mut on_member: F,
-) -> Result<()>
+///
+/// Members smaller than `opts.chunk_size` are grouped together into a shared
+/// zstd frame, so a member is reported once the group it belongs to has been
+/// flushed.
+pub fn wrap_with<R, W, F>(input: R, mut output: W, opts: WrapOptions, mut on_member: F) -> Result<()>
 where
     R: Read,
     W: Write,
@@ -115,6 +123,7 @@ where
         bail!("chunk size must be greater than zero");
     }
     let chunk_size = opts.chunk_size as u64;
+    let level = opts.level;
 
     let window = Rc::new(RefCell::new(Window {
         buf: Vec::new(),
@@ -132,11 +141,16 @@ where
     let mut pos = id_frame.len() as u64;
 
     let mut members: Vec<TocMember> = Vec::new();
-    // Member whose final (sub-chunk-size) chunk is not yet emitted, paired with
-    // the absolute tar offset at which that member's data and padding end.
-    let mut pending: Option<(usize, u64)> = None;
-    // Absolute tar offset where the next not-yet-emitted chunk begins.
+    // Members accumulated for the current shared frame, with each member's
+    // region size; the group covers `[next_chunk_start, next_chunk_start + group_size)`.
+    let mut group: Vec<(usize, u64)> = Vec::new();
+    let mut group_size: u64 = 0;
+    // Absolute tar offset where the next not-yet-emitted frame begins; kept
+    // equal to the window's base.
     let mut next_chunk_start: u64 = 0;
+    // Absolute tar offset where the most recently parsed member's region ends.
+    let mut prev_entry_end: u64 = 0;
+    let mut pending: Option<Pending> = None;
     let mut scratch = vec![0u8; 64 * 1024];
 
     {
@@ -144,64 +158,105 @@ where
         for entry in entries {
             let mut entry = entry.context("failed to read tar entry")?;
 
-            // The tar reader consumed this entry's extension headers and
-            // 512-byte header to reach it, so the previous member's bytes are
-            // now all in the window: emit its trailing chunk.
-            if let Some((prev_idx, prev_end)) = pending.take() {
-                let end = prev_end.min(window.borrow().end());
-                emit_chunk(
-                    &mut output,
-                    &mut pos,
-                    &window,
-                    next_chunk_start,
-                    end,
-                    opts.level,
-                    &mut members[prev_idx].chunks,
-                )?;
-                next_chunk_start = end;
-                window.borrow_mut().drain_to(next_chunk_start);
-                on_member(&members[prev_idx]);
-            }
-
-            let member = read_member_metadata(&entry)?;
-            let header_pos = entry.raw_header_position();
-            let entry_end = header_pos + 512 + member.size.div_ceil(512) * 512;
-            let member_idx = members.len();
-            members.push(member);
-
-            // Pull this member's data through the window ourselves, emitting a
-            // chunk whenever a full chunk_size has accumulated. Letting the tar
-            // reader skip the data instead would buffer the whole member.
-            let mut data_left = members[member_idx].size;
-            while data_left > 0 {
-                let want = data_left.min(scratch.len() as u64) as usize;
-                let n = entry
-                    .read(&mut scratch[..want])
-                    .context("failed to read entry data")?;
-                if n == 0 {
-                    bail!(
-                        "unexpected end of input while reading {}",
-                        members[member_idx].path
-                    );
+            // The previous member's region is now fully captured (the tar
+            // reader consumed this entry's extension headers and 512-byte
+            // header to reach it).
+            match pending.take() {
+                Some(Pending::Small { idx, region_size }) => {
+                    add_to_group(
+                        &mut output,
+                        &mut pos,
+                        &window,
+                        level,
+                        &mut members,
+                        &mut group,
+                        &mut group_size,
+                        &mut next_chunk_start,
+                        &mut on_member,
+                        chunk_size,
+                        idx,
+                        region_size,
+                    )?;
                 }
-                data_left -= n as u64;
-                while window.borrow().end() - next_chunk_start >= chunk_size {
-                    let end = next_chunk_start + chunk_size;
-                    emit_chunk(
+                Some(Pending::Large { idx, entry_end }) => {
+                    let end = entry_end.min(window.borrow().end());
+                    push_frame(
                         &mut output,
                         &mut pos,
                         &window,
                         next_chunk_start,
                         end,
-                        opts.level,
-                        &mut members[member_idx].chunks,
+                        level,
+                        &mut members[idx].chunks,
                     )?;
+                    window.borrow_mut().drain_to(end);
                     next_chunk_start = end;
-                    window.borrow_mut().drain_to(next_chunk_start);
+                    on_member(&members[idx]);
                 }
+                None => {}
             }
 
-            pending = Some((member_idx, entry_end));
+            let member = read_member_metadata(&entry)?;
+            let header_pos = entry.raw_header_position();
+            let entry_end = header_pos + 512 + member.size.div_ceil(512) * 512;
+            let region_size = entry_end - prev_entry_end;
+            prev_entry_end = entry_end;
+            let idx = members.len();
+            members.push(member);
+
+            if region_size >= chunk_size {
+                // Large member: it gets its own frames, split at chunk_size.
+                // Flush any pending group so the large member starts a frame.
+                flush_group(
+                    &mut output,
+                    &mut pos,
+                    &window,
+                    level,
+                    &mut members,
+                    &mut group,
+                    &mut group_size,
+                    &mut next_chunk_start,
+                    &mut on_member,
+                )?;
+
+                // Pull the data through the window ourselves, emitting a frame
+                // whenever a full chunk_size has accumulated. Letting the tar
+                // reader skip the data instead would buffer the whole member.
+                let mut data_left = members[idx].size;
+                while data_left > 0 {
+                    let want = data_left.min(scratch.len() as u64) as usize;
+                    let n = entry
+                        .read(&mut scratch[..want])
+                        .context("failed to read entry data")?;
+                    if n == 0 {
+                        bail!(
+                            "unexpected end of input while reading {}",
+                            members[idx].path
+                        );
+                    }
+                    data_left -= n as u64;
+                    while window.borrow().end() - next_chunk_start >= chunk_size {
+                        let end = next_chunk_start + chunk_size;
+                        push_frame(
+                            &mut output,
+                            &mut pos,
+                            &window,
+                            next_chunk_start,
+                            end,
+                            level,
+                            &mut members[idx].chunks,
+                        )?;
+                        window.borrow_mut().drain_to(end);
+                        next_chunk_start = end;
+                    }
+                }
+
+                pending = Some(Pending::Large { idx, entry_end });
+            } else {
+                // Small member: grouped into a shared frame. Its data is left
+                // for the tar reader to skip, which still captures it.
+                pending = Some(Pending::Small { idx, region_size });
+            }
         }
     }
 
@@ -211,33 +266,64 @@ where
     std::io::copy(&mut reader, &mut std::io::sink()).context("failed to drain trailing bytes")?;
     let total = window.borrow().end();
 
-    if let Some((prev_idx, prev_end)) = pending.take() {
-        let end = prev_end.min(total);
-        emit_chunk(
-            &mut output,
-            &mut pos,
-            &window,
-            next_chunk_start,
-            end,
-            opts.level,
-            &mut members[prev_idx].chunks,
-        )?;
-        next_chunk_start = end;
-        window.borrow_mut().drain_to(next_chunk_start);
-        on_member(&members[prev_idx]);
+    match pending.take() {
+        Some(Pending::Small { idx, region_size }) => {
+            add_to_group(
+                &mut output,
+                &mut pos,
+                &window,
+                level,
+                &mut members,
+                &mut group,
+                &mut group_size,
+                &mut next_chunk_start,
+                &mut on_member,
+                chunk_size,
+                idx,
+                region_size,
+            )?;
+        }
+        Some(Pending::Large { idx, entry_end }) => {
+            let end = entry_end.min(total);
+            push_frame(
+                &mut output,
+                &mut pos,
+                &window,
+                next_chunk_start,
+                end,
+                level,
+                &mut members[idx].chunks,
+            )?;
+            window.borrow_mut().drain_to(end);
+            next_chunk_start = end;
+            on_member(&members[idx]);
+        }
+        None => {}
     }
 
-    // Trailing chunk: end-of-archive marker and padding. It has no TOC member,
+    flush_group(
+        &mut output,
+        &mut pos,
+        &window,
+        level,
+        &mut members,
+        &mut group,
+        &mut group_size,
+        &mut next_chunk_start,
+        &mut on_member,
+    )?;
+
+    // Trailing frame: end-of-archive marker and padding. It has no TOC member,
     // so its ChunkInfo is discarded.
     if total > next_chunk_start {
         let mut discard = Vec::new();
-        emit_chunk(
+        push_frame(
             &mut output,
             &mut pos,
             &window,
             next_chunk_start,
             total,
-            opts.level,
+            level,
             &mut discard,
         )?;
     }
@@ -255,9 +341,111 @@ where
     Ok(())
 }
 
-/// Compresses the window's `[start, end)` bytes as an independent zstd frame,
-/// appends it to `output`, advances `pos`, and records its `ChunkInfo`.
-fn emit_chunk<W: Write>(
+/// Adds a small member to the current group, flushing the group as needed to
+/// keep it within `chunk_size`.
+#[allow(clippy::too_many_arguments)]
+fn add_to_group<W, F>(
+    output: &mut W,
+    pos: &mut u64,
+    window: &Rc<RefCell<Window>>,
+    level: i32,
+    members: &mut [TocMember],
+    group: &mut Vec<(usize, u64)>,
+    group_size: &mut u64,
+    next_chunk_start: &mut u64,
+    on_member: &mut F,
+    chunk_size: u64,
+    idx: usize,
+    region_size: u64,
+) -> Result<()>
+where
+    W: Write,
+    F: FnMut(&TocMember),
+{
+    if !group.is_empty() && *group_size + region_size > chunk_size {
+        flush_group(
+            output,
+            pos,
+            window,
+            level,
+            members,
+            group,
+            group_size,
+            next_chunk_start,
+            on_member,
+        )?;
+    }
+    group.push((idx, region_size));
+    *group_size += region_size;
+    if *group_size >= chunk_size {
+        flush_group(
+            output,
+            pos,
+            window,
+            level,
+            members,
+            group,
+            group_size,
+            next_chunk_start,
+            on_member,
+        )?;
+    }
+    Ok(())
+}
+
+/// Compresses the grouped members as one shared zstd frame and records a
+/// `ChunkInfo` for each, then drains the window and reports the members.
+#[allow(clippy::too_many_arguments)]
+fn flush_group<W, F>(
+    output: &mut W,
+    pos: &mut u64,
+    window: &Rc<RefCell<Window>>,
+    level: i32,
+    members: &mut [TocMember],
+    group: &mut Vec<(usize, u64)>,
+    group_size: &mut u64,
+    next_chunk_start: &mut u64,
+    on_member: &mut F,
+) -> Result<()>
+where
+    W: Write,
+    F: FnMut(&TocMember),
+{
+    if group.is_empty() {
+        return Ok(());
+    }
+    let start = *next_chunk_start;
+    let end = start + *group_size;
+
+    if let Some((compressed_offset, compressed_size, sha256)) =
+        compress_frame(output, pos, window, start, end, level)?
+    {
+        let mut frame_offset = 0u64;
+        for (idx, region_size) in group.iter() {
+            members[*idx].chunks.push(ChunkInfo {
+                compressed_offset,
+                compressed_size,
+                uncompressed_size: *region_size,
+                frame_offset,
+                sha256: Some(sha256.clone()),
+            });
+            frame_offset += region_size;
+        }
+    }
+
+    window.borrow_mut().drain_to(end);
+    *next_chunk_start = end;
+    for (idx, _) in group.iter() {
+        on_member(&members[*idx]);
+    }
+    group.clear();
+    *group_size = 0;
+    Ok(())
+}
+
+/// Compresses the window's `[start, end)` bytes as a standalone zstd frame and
+/// records a single `ChunkInfo` for it (`frame_offset` is zero).
+fn push_frame<W: Write>(
     output: &mut W,
     pos: &mut u64,
     window: &Rc<RefCell<Window>>,
@@ -266,10 +454,37 @@ fn emit_chunk<W: Write>(
     level: i32,
     chunks: &mut Vec<ChunkInfo>,
 ) -> Result<()> {
+    if let Some((compressed_offset, compressed_size, sha256)) =
+        compress_frame(output, pos, window, start, end, level)?
+    {
+        chunks.push(ChunkInfo {
+            compressed_offset,
+            compressed_size,
+            uncompressed_size: end - start,
+            frame_offset: 0,
+            sha256: Some(sha256),
+        });
+    }
+    Ok(())
+}
+
+/// Compresses the window's `[start, end)` bytes as an independent zstd frame,
+/// appends it to `output`, and advances `pos`.
+///
+/// Returns the frame's compressed offset, compressed size, and the SHA-256 of
+/// its decompressed contents — or `None` if the range is empty.
+fn compress_frame<W: Write>(
+    output: &mut W,
+    pos: &mut u64,
+    window: &Rc<RefCell<Window>>,
+    start: u64,
+    end: u64,
+    level: i32,
+) -> Result<Option<(u64, u64, String)>> {
     let window = window.borrow();
     let bytes = window.slice(start, end);
     if bytes.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
     let compressed_offset = *pos;
@@ -285,13 +500,7 @@ fn emit_chunk<W: Write>(
     };
     *pos += compressed_size;
 
-    chunks.push(ChunkInfo {
-        compressed_offset,
-        compressed_size,
-        uncompressed_size: bytes.len() as u64,
-        sha256: Some(sha256_hex(bytes)),
-    });
-    Ok(())
+    Ok(Some((compressed_offset, compressed_size, sha256_hex(bytes))))
 }
 
 /// Reads an entry's metadata into a partial `TocMember` (with no `chunks`).

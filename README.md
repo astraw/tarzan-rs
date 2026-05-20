@@ -228,6 +228,12 @@ and chunk offsets:
 ]
 ```
 
+Each entry in `chunks` locates one member's bytes inside a compressed
+frame. A member larger than the chunk size spans several chunks; small
+members are packed together to share a frame, and `frame_offset`
+(omitted when zero) then gives the member's offset within that frame's
+decompressed data.
+
 Pipe through `jq` to slice out fields you don't want (for example
 `jq 'map(del(.chunks))'`).
 
@@ -387,10 +393,9 @@ A tarzan archive is a valid zstd stream consisting of three sections:
 │  Magic: 0x184D2A54  Content: "TRZN" + version byte      │
 ├─────────────────────────────────────────────────────────┤
 │  Compressed data frames                                  │
-│  One or more independent zstd frames per tar member.    │
-│  Each frame holds one chunk of one member.              │
-│  Large members are split at --chunk-size boundaries;    │
-│  a small member is a single chunk.                      │
+│  Independent zstd frames sized around --chunk-size.     │
+│  Large members are split across several frames; small  │
+│  members are packed together to share a frame.          │
 ├─────────────────────────────────────────────────────────┤
 │  TOC frame (skippable)                                  │
 │  Magic: 0x184D2A54  Content: zstd-compressed JSON TOC   │
@@ -445,6 +450,10 @@ The TOC is a zstd-compressed JSON object. Abridged example:
   ]
 }
 ```
+
+Each chunk also carries an optional `frame_offset` (omitted when zero):
+when small members are packed into a shared frame, it records where the
+member's bytes begin within that frame's decompressed data.
 
 Full schema documentation is in [docs/format.md](docs/format.md).
 
@@ -521,8 +530,9 @@ skips a few of its older ergonomics:
 | Self-describing format | ✗ | ✗ | ✓ | ✓ |
 | Per-file integrity checksums | ✗ | ✗ | ✓ | optional |
 
-† Slightly lower than monolithic `.tar.zst` due to per-chunk independent compression,
-which loses cross-member redundancy. For most archives the difference is under 5%.
+† Slightly lower than monolithic `.tar.zst` due to per-frame independent compression,
+which loses redundancy across frame boundaries. Small members are packed together so
+redundancy is still captured within a frame; for most archives the difference is under 5%.
 
 ---
 

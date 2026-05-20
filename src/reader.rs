@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -133,7 +134,9 @@ impl TarzanReader {
             let mut decoder =
                 zstd::stream::read::Decoder::new(limited).context("failed to create zstd decoder")?;
 
-            crate::io::skip_exact(&mut decoder, skip)
+            // `frame_offset` skips past other members sharing this frame; `skip`
+            // then skips this member's own extension headers and tar header.
+            crate::io::skip_exact(&mut decoder, chunk.frame_offset + skip)
                 .context("failed to skip to file data in chunk")?;
             let available = chunk.uncompressed_size - skip;
             let take = available.min(remaining);
@@ -174,24 +177,37 @@ fn verify_members<'a>(
     members: impl Iterator<Item = &'a TocMember>,
 ) -> Result<Vec<VerifyRecord>> {
     let mut results = Vec::new();
+    // Members can share a frame (small-member grouping), so decode each
+    // distinct frame only once, keyed by its compressed offset.
+    let mut frame_hashes: HashMap<u64, String> = HashMap::new();
     for member in members {
         for (chunk_index, chunk) in member.chunks.iter().enumerate() {
             let status = match &chunk.sha256 {
                 None => VerifyStatus::NoChecksum,
                 Some(expected) => {
-                    file.seek(SeekFrom::Start(chunk.compressed_offset))
-                        .with_context(|| {
-                            format!("seek failed for chunk {chunk_index} of {}", member.path)
-                        })?;
-                    let mut limited = (&mut *file).take(chunk.compressed_size);
-                    let decompressed =
-                        zstd::stream::decode_all(&mut limited).with_context(|| {
-                            format!(
-                                "decompress failed for chunk {chunk_index} of {}",
-                                member.path
-                            )
-                        })?;
-                    let actual = sha256_hex(&decompressed);
+                    let actual = match frame_hashes.get(&chunk.compressed_offset) {
+                        Some(hash) => hash.clone(),
+                        None => {
+                            file.seek(SeekFrom::Start(chunk.compressed_offset))
+                                .with_context(|| {
+                                    format!(
+                                        "seek failed for chunk {chunk_index} of {}",
+                                        member.path
+                                    )
+                                })?;
+                            let mut limited = (&mut *file).take(chunk.compressed_size);
+                            let decompressed = zstd::stream::decode_all(&mut limited)
+                                .with_context(|| {
+                                    format!(
+                                        "decompress failed for chunk {chunk_index} of {}",
+                                        member.path
+                                    )
+                                })?;
+                            let hash = sha256_hex(&decompressed);
+                            frame_hashes.insert(chunk.compressed_offset, hash.clone());
+                            hash
+                        }
+                    };
                     if actual == *expected {
                         VerifyStatus::Ok
                     } else {

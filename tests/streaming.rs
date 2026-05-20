@@ -1,8 +1,37 @@
+use std::collections::HashSet;
 use std::io::{self, Cursor, Read, Write};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use tempfile::tempdir;
+
+/// Builds an in-memory tar holding several small regular files.
+fn multi_file_tar(files: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut builder = tar::Builder::new(Vec::new());
+    for (name, data) in files {
+        let mut header = tar::Header::new_gnu();
+        header.set_size(data.len() as u64);
+        header.set_mode(0o644);
+        header.set_uid(0);
+        header.set_gid(0);
+        header.set_mtime(0);
+        header.set_entry_type(tar::EntryType::Regular);
+        builder
+            .append_data(&mut header, name, *data)
+            .expect("append file to tar");
+    }
+    builder.into_inner().expect("finish tar")
+}
+
+/// Distinct compressed frame offsets referenced by an archive's members.
+fn distinct_frames(reader: &tarzan::TarzanReader) -> HashSet<u64> {
+    reader
+        .members()
+        .iter()
+        .flat_map(|m| m.chunks.iter())
+        .map(|c| c.compressed_offset)
+        .collect()
+}
 
 /// Builds an in-memory tar holding a single regular file of `size` bytes,
 /// returning `(tar_bytes, file_data)`.
@@ -76,6 +105,86 @@ fn split_archive_still_decodes_bit_for_bit() {
         decoded, tar,
         "concatenated chunks must reproduce the tar stream exactly"
     );
+}
+
+#[test]
+fn small_members_are_packed_into_a_shared_frame() {
+    let files: Vec<(String, Vec<u8>)> = (0..50)
+        .map(|i| {
+            (
+                format!("file{i}.txt"),
+                format!("contents of file {i}\n").into_bytes(),
+            )
+        })
+        .collect();
+    let refs: Vec<(&str, &[u8])> = files
+        .iter()
+        .map(|(n, d)| (n.as_str(), d.as_slice()))
+        .collect();
+    let tar = multi_file_tar(&refs);
+
+    let temp = tempdir().expect("tempdir");
+    let archive_path = temp.path().join("archive.tar.zst");
+    let out = std::fs::File::create(&archive_path).expect("create archive");
+    // The default chunk size dwarfs the whole archive: all members fit in one frame.
+    tarzan::wrap(Cursor::new(&tar), out, tarzan::WrapOptions::default()).expect("wrap");
+
+    let reader = tarzan::TarzanReader::open(&archive_path).expect("open archive");
+    assert_eq!(
+        distinct_frames(&reader).len(),
+        1,
+        "all small members should be packed into a single shared frame"
+    );
+
+    // Every member must still extract correctly out of the shared frame.
+    for (name, data) in &files {
+        let mut extracted = Vec::new();
+        reader
+            .extract_member(name, &mut extracted)
+            .expect("extract should succeed");
+        assert_eq!(&extracted, data, "extracted data for {name} must match");
+    }
+
+    for record in reader.verify_all().expect("verify should succeed") {
+        assert!(
+            matches!(record.status, tarzan::VerifyStatus::Ok),
+            "chunk of {} failed verification",
+            record.path
+        );
+    }
+}
+
+#[test]
+fn grouping_splits_into_several_frames_at_chunk_size() {
+    let files: Vec<(String, Vec<u8>)> = (0..40).map(|i| (format!("f{i}"), vec![b'x'; 1000])).collect();
+    let refs: Vec<(&str, &[u8])> = files
+        .iter()
+        .map(|(n, d)| (n.as_str(), d.as_slice()))
+        .collect();
+    let tar = multi_file_tar(&refs);
+
+    let temp = tempdir().expect("tempdir");
+    let archive_path = temp.path().join("archive.tar.zst");
+    let out = std::fs::File::create(&archive_path).expect("create archive");
+    // Each member region is ~1.5 KiB; an 8 KiB chunk size packs a handful per frame.
+    let opts = tarzan::WrapOptions::default().chunk_size(8 * 1024);
+    tarzan::wrap(Cursor::new(&tar), out, opts).expect("wrap");
+
+    let reader = tarzan::TarzanReader::open(&archive_path).expect("open archive");
+    let frames = distinct_frames(&reader).len();
+    assert!(
+        frames > 1 && frames < files.len(),
+        "expected several grouped frames, got {frames} for {} members",
+        files.len()
+    );
+
+    for (name, data) in &files {
+        let mut extracted = Vec::new();
+        reader
+            .extract_member(name, &mut extracted)
+            .expect("extract should succeed");
+        assert_eq!(&extracted, data, "extracted data for {name} must match");
+    }
 }
 
 /// A reader that records the running total of bytes it has served.

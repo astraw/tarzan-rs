@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use anyhow::Result;
@@ -10,17 +11,19 @@ pub fn run(archive: &Path, json: bool) -> Result<()> {
 
     let members = reader.members();
     let member_count = members.len();
-    let chunk_count: u64 = members.iter().map(|m| m.chunks.len() as u64).sum();
     let uncompressed: u64 = members
         .iter()
         .flat_map(|m| m.chunks.iter())
         .map(|c| c.uncompressed_size)
         .sum();
-    let compressed: u64 = members
-        .iter()
-        .flat_map(|m| m.chunks.iter())
-        .map(|c| c.compressed_size)
-        .sum();
+    // Small members can share a compressed frame, so collapse chunk records to
+    // distinct frames (keyed by compressed offset) before counting and summing.
+    let mut frames: HashMap<u64, u64> = HashMap::new();
+    for chunk in members.iter().flat_map(|m| m.chunks.iter()) {
+        frames.entry(chunk.compressed_offset).or_insert(chunk.compressed_size);
+    }
+    let chunk_count = frames.len() as u64;
+    let compressed: u64 = frames.values().sum();
     let archive_size = reader.archive_size();
     let toc_offset = reader.toc_offset();
     let toc_frame_size = reader.toc_frame_size();

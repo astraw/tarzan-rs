@@ -45,8 +45,17 @@ pub struct ChunkInfo {
     pub compressed_offset: u64,
     pub compressed_size: u64,
     pub uncompressed_size: u64,
+    /// Offset of this member's bytes within the frame's decompressed output.
+    /// Zero unless the member shares a frame with other (small) members; see
+    /// the grouping notes in the format documentation.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub frame_offset: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sha256: Option<String>,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 /// Encodes a `TocFrame` as a tarzan skippable frame ready to append to an archive.
