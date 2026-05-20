@@ -1,0 +1,12 @@
+# release-plz configuration — https://release-plz.dev/docs/config
+#
+# release-plz publishes crates to crates.io and creates git tags plus
+# GitHub releases (with generated changelog notes). It does NOT build
+# platform binaries; see cargo-dist if you want compiled artifacts
+# attached to each GitHub release.
+
+[workspace]
+# Each crate keeps an independent version, bumped from its own
+# Conventional Commit history.
+git_release_enable = true
+# `tarzan` (lib) and `tarzan-cli` (bin) are both published.
