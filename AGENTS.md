@@ -18,3 +18,5 @@
   Features from the most recent rust version can be used.
 - New logic should have unit tests in the same file (`#[cfg(test)]` module) or
   in a `tests/` directory.
+- commits should follow the Conventional Commits specification. Include your model
+  as the last item in the subject line in parenthesis.
