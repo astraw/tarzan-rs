@@ -26,8 +26,8 @@ pub fn run(archive: &Path, json: bool) -> Result<()> {
     let toc_frame_size = reader.toc_frame_size();
     let identity_version = reader.identity_version();
 
-    let ratio_value: Option<f64> = (uncompressed > 0)
-        .then(|| archive_size as f64 / uncompressed as f64);
+    let ratio_value: Option<f64> =
+        (uncompressed > 0).then(|| archive_size as f64 / uncompressed as f64);
     let avg_chunk_bytes: Option<u64> = (chunk_count > 0).then(|| uncompressed / chunk_count);
 
     if json {

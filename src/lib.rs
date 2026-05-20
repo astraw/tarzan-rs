@@ -1,6 +1,6 @@
-pub mod format;
 mod extract;
 pub mod filter;
+pub mod format;
 mod io;
 mod reader;
 mod wrap;

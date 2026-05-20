@@ -5,7 +5,10 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
-use crate::format::{self, toc::{EntryType, TocMember}};
+use crate::format::{
+    self,
+    toc::{EntryType, TocMember},
+};
 
 /// Reads a tarzan archive without decompressing the data frames.
 pub struct TarzanReader {
@@ -82,7 +85,8 @@ impl TarzanReader {
     /// Seeks directly to the member's compressed chunk; decompresses only that chunk.
     /// Returns an error if the path is not found or the member is not a regular file.
     pub fn extract_member(&self, target_path: &str, out: &mut dyn Write) -> Result<()> {
-        let (member_idx, member) = self.members
+        let (member_idx, member) = self
+            .members
             .iter()
             .enumerate()
             .find(|(_, m)| m.path == target_path)
@@ -92,7 +96,9 @@ impl TarzanReader {
             bail!("{target_path} is not a regular file");
         }
 
-        let chunk = member.chunks.first()
+        let chunk = member
+            .chunks
+            .first()
             .ok_or_else(|| anyhow::anyhow!("member has no chunks: {target_path}"))?;
 
         // Chunks are contiguous in the raw tar stream. chunk_tar_start is the sum of
@@ -112,8 +118,8 @@ impl TarzanReader {
         file.seek(SeekFrom::Start(chunk.compressed_offset))
             .context("failed to seek to chunk")?;
 
-        let mut decoder = zstd::stream::read::Decoder::new(&mut file)
-            .context("failed to create zstd decoder")?;
+        let mut decoder =
+            zstd::stream::read::Decoder::new(&mut file).context("failed to create zstd decoder")?;
 
         crate::io::skip_exact(&mut decoder, data_offset)
             .context("failed to skip to file data in chunk")?;
@@ -132,7 +138,8 @@ impl TarzanReader {
 
     /// Verifies the SHA-256 checksums for the single member at `target_path`.
     pub fn verify_member(&self, target_path: &str) -> Result<Vec<VerifyRecord>> {
-        let member = self.members
+        let member = self
+            .members
             .iter()
             .find(|m| m.path == target_path)
             .ok_or_else(|| anyhow::anyhow!("path not found in archive: {target_path}"))?;
@@ -153,15 +160,25 @@ fn verify_members<'a>(
                 None => VerifyStatus::NoChecksum,
                 Some(expected) => {
                     file.seek(SeekFrom::Start(chunk.compressed_offset))
-                        .with_context(|| format!("seek failed for chunk {chunk_index} of {}", member.path))?;
+                        .with_context(|| {
+                            format!("seek failed for chunk {chunk_index} of {}", member.path)
+                        })?;
                     let mut limited = (&mut *file).take(chunk.compressed_size);
-                    let decompressed = zstd::stream::decode_all(&mut limited)
-                        .with_context(|| format!("decompress failed for chunk {chunk_index} of {}", member.path))?;
+                    let decompressed =
+                        zstd::stream::decode_all(&mut limited).with_context(|| {
+                            format!(
+                                "decompress failed for chunk {chunk_index} of {}",
+                                member.path
+                            )
+                        })?;
                     let actual = sha256_hex(&decompressed);
                     if actual == *expected {
                         VerifyStatus::Ok
                     } else {
-                        VerifyStatus::Mismatch { expected: expected.clone(), actual }
+                        VerifyStatus::Mismatch {
+                            expected: expected.clone(),
+                            actual,
+                        }
                     }
                 }
             };
@@ -211,8 +228,7 @@ fn find_toc(file: &mut File, file_size: u64) -> Result<TocLocation> {
         if buf[p..p + 4] != magic {
             continue;
         }
-        let payload_size =
-            u32::from_le_bytes(buf[p + 4..p + 8].try_into().unwrap()) as usize;
+        let payload_size = u32::from_le_bytes(buf[p + 4..p + 8].try_into().unwrap()) as usize;
         if p + 8 + payload_size != buf.len() {
             continue; // frame doesn't end exactly at EOF
         }

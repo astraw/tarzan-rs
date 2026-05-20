@@ -7,7 +7,7 @@ use tempfile::tempdir;
 
 fn fixture_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/fixtures/tiny-tree")
+        .join("testdata/fixtures/tiny-tree")
         .canonicalize()
         .expect("fixture path should exist")
 }

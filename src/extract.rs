@@ -73,8 +73,7 @@ impl TarzanReader {
     where
         F: FnMut(&str),
     {
-        let includes =
-            PathFilter::new(&opts.includes).context("invalid include/filter pattern")?;
+        let includes = PathFilter::new(&opts.includes).context("invalid include/filter pattern")?;
         let excludes = compile_patterns(&opts.excludes).context("invalid exclude pattern")?;
 
         fs::create_dir_all(dest)
@@ -128,9 +127,8 @@ impl TarzanReader {
         // Directory mtimes last: writing children (files, subdirs, hard
         // links) bumps the parent's mtime back to "now".
         for (path, mtime) in deferred.dir_times {
-            filetime::set_file_mtime(&path, mtime).with_context(|| {
-                format!("setting mtime on directory {}", path.display())
-            })?;
+            filetime::set_file_mtime(&path, mtime)
+                .with_context(|| format!("setting mtime on directory {}", path.display()))?;
         }
 
         Ok(())
@@ -145,8 +143,7 @@ impl TarzanReader {
         deferred: &mut Deferred,
     ) -> Result<()> {
         if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         }
         let mtime = FileTime::from_unix_time(member.mtime, 0);
         match member.entry_type {
@@ -180,9 +177,9 @@ impl TarzanReader {
                     // Use mtime for both atime and mtime; the TOC doesn't
                     // record atime separately, and most filesystems don't
                     // accurately preserve it anyway.
-                    filetime::set_symlink_file_times(target, mtime, mtime).with_context(
-                        || format!("setting mtime on symlink {}", target.display()),
-                    )?;
+                    filetime::set_symlink_file_times(target, mtime, mtime).with_context(|| {
+                        format!("setting mtime on symlink {}", target.display())
+                    })?;
                 }
             }
             EntryType::HardLink => {
@@ -190,9 +187,10 @@ impl TarzanReader {
                 // Defer creation until that file has been written; no
                 // mtime fixup — a hard link shares the target's inode,
                 // which already carries the right timestamp.
-                let link_target = member.link_target.as_deref().ok_or_else(|| {
-                    anyhow!("hard link {} has no link_target", member.path)
-                })?;
+                let link_target = member
+                    .link_target
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("hard link {} has no link_target", member.path))?;
                 match normalize_member_path(link_target, opts.strip_components)? {
                     Some(src_rel) if !src_rel.as_os_str().is_empty() => {
                         deferred.hard_links.push((
@@ -207,10 +205,7 @@ impl TarzanReader {
                     ),
                 }
             }
-            EntryType::CharDevice
-            | EntryType::BlockDevice
-            | EntryType::Fifo
-            | EntryType::Other => {
+            EntryType::CharDevice | EntryType::BlockDevice | EntryType::Fifo | EntryType::Other => {
                 warn!(path = %member.path, "skipping unsupported entry type");
             }
         }
@@ -221,8 +216,7 @@ impl TarzanReader {
 fn compile_patterns(raw: &[String]) -> Result<Vec<Pattern>> {
     raw.iter()
         .map(|s| {
-            Pattern::new(normalize_for_match(s))
-                .map_err(|e| anyhow!("invalid pattern `{s}`: {e}"))
+            Pattern::new(normalize_for_match(s)).map_err(|e| anyhow!("invalid pattern `{s}`: {e}"))
         })
         .collect()
 }
@@ -278,7 +272,10 @@ fn create_symlink(link_target: &str, target: &Path) -> Result<()> {
 
 #[cfg(not(unix))]
 fn create_symlink(_link_target: &str, target: &Path) -> Result<()> {
-    bail!("symlinks not supported on this platform ({})", target.display())
+    bail!(
+        "symlinks not supported on this platform ({})",
+        target.display()
+    )
 }
 
 #[cfg(test)]

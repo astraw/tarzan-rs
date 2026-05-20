@@ -6,7 +6,7 @@ use tempfile::tempdir;
 
 fn fixture_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/fixtures/tiny-tree")
+        .join("testdata/fixtures/tiny-tree")
         .canonicalize()
         .expect("fixture path should exist")
 }
@@ -62,7 +62,10 @@ fn cat_extracts_readme_txt() {
     );
 
     let expected = fs::read(fixture_root().join("README.txt")).expect("read fixture");
-    assert_eq!(output.stdout, expected, "cat output should match fixture file bytes");
+    assert_eq!(
+        output.stdout, expected,
+        "cat output should match fixture file bytes"
+    );
 }
 
 #[test]

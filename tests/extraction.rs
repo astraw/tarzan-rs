@@ -8,7 +8,9 @@ use tempfile::tempdir;
 fn make_tar<F: FnOnce(&mut tar::Builder<Vec<u8>>)>(f: F) -> Vec<u8> {
     let mut builder = tar::Builder::new(Vec::new());
     f(&mut builder);
-    builder.into_inner().expect("failed to finalise tar builder")
+    builder
+        .into_inner()
+        .expect("failed to finalise tar builder")
 }
 
 fn wrap_to_file(raw: &[u8]) -> (tempfile::TempDir, std::path::PathBuf) {
@@ -41,7 +43,9 @@ fn extract_member_returns_correct_bytes() {
 
     let reader = TarzanReader::open(&path).expect("open");
     let mut out = Vec::new();
-    reader.extract_member("hello.txt", &mut out).expect("extract");
+    reader
+        .extract_member("hello.txt", &mut out)
+        .expect("extract");
     assert_eq!(out, content);
 }
 
@@ -52,7 +56,9 @@ fn extract_member_empty_file_yields_empty_bytes() {
 
     let reader = TarzanReader::open(&path).expect("open");
     let mut out = Vec::new();
-    reader.extract_member("empty.txt", &mut out).expect("extract");
+    reader
+        .extract_member("empty.txt", &mut out)
+        .expect("extract");
     assert!(out.is_empty());
 }
 
@@ -64,7 +70,9 @@ fn extract_member_binary_content_exact() {
 
     let reader = TarzanReader::open(&path).expect("open");
     let mut out = Vec::new();
-    reader.extract_member("binary.bin", &mut out).expect("extract");
+    reader
+        .extract_member("binary.bin", &mut out)
+        .expect("extract");
     assert_eq!(out, content);
 }
 
@@ -88,11 +96,15 @@ fn extract_member_second_entry_correct() {
     let reader = TarzanReader::open(&path).expect("open");
 
     let mut out_a = Vec::new();
-    reader.extract_member("a.txt", &mut out_a).expect("extract a");
+    reader
+        .extract_member("a.txt", &mut out_a)
+        .expect("extract a");
     assert_eq!(out_a, b"aaaa");
 
     let mut out_b = Vec::new();
-    reader.extract_member("b.txt", &mut out_b).expect("extract b");
+    reader
+        .extract_member("b.txt", &mut out_b)
+        .expect("extract b");
     assert_eq!(out_b, b"bbbbbb");
 }
 

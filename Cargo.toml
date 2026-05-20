@@ -1,15 +1,16 @@
-[workspace]
-members = ["crates/tarzan", "crates/tarzan-cli"]
-resolver = "3"
-
-[workspace.package]
+[package]
+name = "tarzan"
+version = "0.1.0"
+description = "Random-access, seekable .tar.zst archives with an embedded table-of-contents index"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
 repository = "https://github.com/astraw/tarzan-rs"
 authors = ["Andrew Straw"]
+keywords = ["tar", "zstd", "archive", "compression", "seekable"]
+categories = ["compression", "filesystem", "command-line-utilities"]
 
-[workspace.dependencies]
+[dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
 filetime = "0.2"
@@ -18,7 +19,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 tar = "0.4"
-tempfile = "3.12"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 zstd = "0.13"
+
+[dev-dependencies]
+tempfile = "3.12"
+
+[[bin]]
+name = "tarzan"
+path = "src/main.rs"

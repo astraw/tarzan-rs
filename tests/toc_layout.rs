@@ -7,7 +7,7 @@ use tempfile::tempdir;
 
 fn fixture_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/fixtures/tiny-tree")
+        .join("testdata/fixtures/tiny-tree")
         .canonicalize()
         .expect("fixture path should exist")
 }
@@ -31,8 +31,7 @@ fn wrap_fixture() -> (tempfile::TempDir, Vec<u8>) {
     create_tar_from_fixture(&tar_path);
     let input = fs::File::open(&tar_path).expect("failed to open tar");
     let mut wrapped = Vec::new();
-    tarzan::wrap(input, &mut wrapped, tarzan::WrapOptions::default())
-        .expect("wrap should succeed");
+    tarzan::wrap(input, &mut wrapped, tarzan::WrapOptions::default()).expect("wrap should succeed");
     (temp, wrapped)
 }
 
@@ -54,8 +53,7 @@ fn wrapped_archive_ends_with_toc_skippable_frame() {
         if wrapped[p..p + 4] != magic {
             continue;
         }
-        let payload_size =
-            u32::from_le_bytes(wrapped[p + 4..p + 8].try_into().unwrap()) as usize;
+        let payload_size = u32::from_le_bytes(wrapped[p + 4..p + 8].try_into().unwrap()) as usize;
         if p + 8 + payload_size != end {
             continue;
         }
@@ -85,8 +83,7 @@ fn toc_contains_expected_entries() {
         if wrapped[p..p + 4] != magic {
             continue;
         }
-        let payload_size =
-            u32::from_le_bytes(wrapped[p + 4..p + 8].try_into().unwrap()) as usize;
+        let payload_size = u32::from_le_bytes(wrapped[p + 4..p + 8].try_into().unwrap()) as usize;
         if p + 8 + payload_size != end {
             continue;
         }
@@ -96,22 +93,31 @@ fn toc_contains_expected_entries() {
             && payload[4] == tarzan::format::FRAME_TYPE_TOC
         {
             toc_frame = Some(
-                tarzan::format::toc::decode_toc_payload(payload).expect("TOC decode should succeed"),
+                tarzan::format::toc::decode_toc_payload(payload)
+                    .expect("TOC decode should succeed"),
             );
             break;
         }
     }
     let toc = toc_frame.expect("TOC frame must be present");
     assert_eq!(toc.tarzan_version, 1);
-    assert!(!toc.members.is_empty(), "TOC should have at least one member");
+    assert!(
+        !toc.members.is_empty(),
+        "TOC should have at least one member"
+    );
 
     // Every member must have exactly one chunk (the single big frame used in MVP).
     for member in &toc.members {
         assert_eq!(member.chunks.len(), 1, "MVP produces one chunk per member");
         let chunk = &member.chunks[0];
-        assert!(chunk.compressed_size > 0, "chunk must have non-zero compressed size");
-        assert!(chunk.uncompressed_size > 0 || member.entry_type == tarzan::format::toc::EntryType::Dir,
-            "non-directory member must have non-zero uncompressed size");
+        assert!(
+            chunk.compressed_size > 0,
+            "chunk must have non-zero compressed size"
+        );
+        assert!(
+            chunk.uncompressed_size > 0 || member.entry_type == tarzan::format::toc::EntryType::Dir,
+            "non-directory member must have non-zero uncompressed size"
+        );
     }
 }
 

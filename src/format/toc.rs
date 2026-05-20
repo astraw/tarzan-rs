@@ -54,8 +54,7 @@ pub struct ChunkInfo {
 /// Payload layout: `TRZN` + `FRAME_TYPE_TOC` + `TOC_VERSION_V1` + zstd-compressed JSON.
 pub fn encode_toc_frame(toc: &TocFrame, level: i32) -> Result<Vec<u8>> {
     let json = serde_json::to_vec(toc).context("failed to serialize TOC to JSON")?;
-    let compressed =
-        zstd::bulk::compress(&json, level).context("failed to compress TOC JSON")?;
+    let compressed = zstd::bulk::compress(&json, level).context("failed to compress TOC JSON")?;
     let payload = [
         IDENTITY_MAGIC.as_slice(),
         &[FRAME_TYPE_TOC, TOC_VERSION_V1],

@@ -11,17 +11,15 @@ use tarzan::format::{self, toc::TocFrame};
 fn make_tar<F: FnOnce(&mut tar::Builder<Vec<u8>>)>(f: F) -> Vec<u8> {
     let mut builder = tar::Builder::new(Vec::new());
     f(&mut builder);
-    builder.into_inner().expect("failed to finalise tar builder")
+    builder
+        .into_inner()
+        .expect("failed to finalise tar builder")
 }
 
 fn wrap(raw: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();
-    tarzan::wrap(
-        Cursor::new(raw),
-        &mut out,
-        tarzan::WrapOptions::default(),
-    )
-    .expect("wrap should succeed");
+    tarzan::wrap(Cursor::new(raw), &mut out, tarzan::WrapOptions::default())
+        .expect("wrap should succeed");
     out
 }
 
@@ -32,16 +30,12 @@ fn decode_toc(wrapped: &[u8]) -> TocFrame {
         if wrapped[p..p + 4] != magic {
             continue;
         }
-        let payload_size =
-            u32::from_le_bytes(wrapped[p + 4..p + 8].try_into().unwrap()) as usize;
+        let payload_size = u32::from_le_bytes(wrapped[p + 4..p + 8].try_into().unwrap()) as usize;
         if p + 8 + payload_size != end {
             continue;
         }
         let payload = &wrapped[p + 8..];
-        if payload.len() >= 5
-            && &payload[0..4] == b"TRZN"
-            && payload[4] == format::FRAME_TYPE_TOC
-        {
+        if payload.len() >= 5 && &payload[0..4] == b"TRZN" && payload[4] == format::FRAME_TYPE_TOC {
             return tarzan::format::toc::decode_toc_payload(payload)
                 .expect("TOC decode should succeed");
         }
@@ -71,7 +65,11 @@ fn identity_frame_is_first() {
     let wrapped = wrap(&raw);
 
     let magic = format::identity::SKIPPABLE_FRAME_MAGIC.to_le_bytes();
-    assert_eq!(&wrapped[0..4], &magic, "archive must open with skippable magic");
+    assert_eq!(
+        &wrapped[0..4],
+        &magic,
+        "archive must open with skippable magic"
+    );
     assert_eq!(&wrapped[8..12], b"TRZN");
     assert_eq!(wrapped[12], format::FRAME_TYPE_IDENTITY);
 }
@@ -126,7 +124,10 @@ fn executable_mode_preserved_in_toc() {
         .iter()
         .find(|m| m.path.contains("script.sh"))
         .expect("script.sh must appear in TOC");
-    assert_eq!(m.mode, 0o755, "executable mode must survive the TOC round-trip");
+    assert_eq!(
+        m.mode, 0o755,
+        "executable mode must survive the TOC round-trip"
+    );
 }
 
 // ── binary content ────────────────────────────────────────────────────────────
@@ -161,9 +162,7 @@ fn deeply_nested_path_in_toc() {
     let raw = single_file_tar("a/b/c/d/e/deep.txt", 0o644, b"deep");
     let toc = decode_toc(&wrap(&raw));
     assert!(
-        toc.members
-            .iter()
-            .any(|m| m.path.contains("deep.txt")),
+        toc.members.iter().any(|m| m.path.contains("deep.txt")),
         "deeply nested path must appear in TOC; got: {:?}",
         toc.members.iter().map(|m| &m.path).collect::<Vec<_>>()
     );
@@ -174,7 +173,11 @@ fn deeply_nested_path_in_toc() {
 #[test]
 fn multiple_entries_all_appear_in_toc() {
     let raw = make_tar(|b| {
-        for (name, content) in [("a.txt", b"aaa".as_slice()), ("b.txt", b"bb"), ("c.txt", b"c")] {
+        for (name, content) in [
+            ("a.txt", b"aaa".as_slice()),
+            ("b.txt", b"bb"),
+            ("c.txt", b"c"),
+        ] {
             let mut h = tar::Header::new_gnu();
             h.set_path(name).unwrap();
             h.set_size(content.len() as u64);
@@ -199,7 +202,11 @@ fn multiple_entries_all_appear_in_toc() {
 #[test]
 fn multiple_entries_roundtrip_tar_bytes() {
     let raw = make_tar(|b| {
-        for (name, content) in [("a.txt", b"aaa".as_slice()), ("b.txt", b"bb"), ("c.txt", b"c")] {
+        for (name, content) in [
+            ("a.txt", b"aaa".as_slice()),
+            ("b.txt", b"bb"),
+            ("c.txt", b"c"),
+        ] {
             let mut h = tar::Header::new_gnu();
             h.set_path(name).unwrap();
             h.set_size(content.len() as u64);

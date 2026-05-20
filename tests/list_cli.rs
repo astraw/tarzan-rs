@@ -6,7 +6,7 @@ use tempfile::tempdir;
 
 fn fixture_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../testdata/fixtures/tiny-tree")
+        .join("testdata/fixtures/tiny-tree")
         .canonicalize()
         .expect("fixture path should exist")
 }
@@ -139,10 +139,7 @@ fn list_nonexistent_archive_exits_nonzero() {
         .arg(temp.path().join("does_not_exist.tar.zst"))
         .status()
         .expect("failed to run tarzan list");
-    assert!(
-        !status.success(),
-        "tarzan list on missing file should fail"
-    );
+    assert!(!status.success(), "tarzan list on missing file should fail");
 }
 
 #[test]

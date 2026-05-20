@@ -583,26 +583,13 @@ name = "tarzan"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "clap",
  "filetime",
  "glob",
  "serde",
  "serde_json",
  "sha2",
  "tar",
- "tempfile",
- "tracing",
- "zstd",
-]
-
-[[package]]
-name = "tarzan-cli"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "filetime",
- "serde_json",
- "tarzan",
  "tempfile",
  "tracing",
  "tracing-subscriber",

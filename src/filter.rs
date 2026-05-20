@@ -22,10 +22,7 @@ impl PathFilter {
     pub fn new(patterns: &[String]) -> Result<Self> {
         let compiled = patterns
             .iter()
-            .map(|s| {
-                Pattern::new(normalize(s))
-                    .map_err(|e| anyhow!("invalid pattern `{s}`: {e}"))
-            })
+            .map(|s| Pattern::new(normalize(s)).map_err(|e| anyhow!("invalid pattern `{s}`: {e}")))
             .collect::<Result<Vec<_>>>()?;
         Ok(Self {
             raw: patterns.to_vec(),

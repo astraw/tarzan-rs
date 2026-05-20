@@ -13,9 +13,7 @@ pub fn run(
     verbose: bool,
 ) -> Result<()> {
     if output.is_none() && io::stdout().is_terminal() {
-        bail!(
-            "refusing to write binary archive to terminal; use `-f FILE` or redirect stdout"
-        );
+        bail!("refusing to write binary archive to terminal; use `-f FILE` or redirect stdout");
     }
 
     let opts = tarzan::WrapOptions::default()
