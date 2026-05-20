@@ -1,7 +1,8 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
@@ -11,9 +12,16 @@ use crate::format::{
     toc::{EntryType, TocMember},
 };
 
+/// A seekable byte source a [`TarzanReader`] can read an archive from.
+///
+/// Blanket-implemented for every `Read + Seek` type — a `File`, an
+/// in-memory `Cursor`, or a custom reader backed by HTTP range requests.
+trait ReadSeek: Read + Seek {}
+impl<T: Read + Seek> ReadSeek for T {}
+
 /// Reads a tarzan archive without decompressing the data frames.
 pub struct TarzanReader {
-    path: PathBuf,
+    source: RefCell<Box<dyn ReadSeek>>,
     members: Vec<TocMember>,
     archive_size: u64,
     toc_offset: u64,
@@ -35,20 +43,33 @@ pub enum VerifyStatus {
 }
 
 impl TarzanReader {
-    /// Opens a tarzan archive: validates the leading identity frame and
+    /// Opens a tarzan archive file: validates the leading identity frame and
     /// loads the TOC by scanning back from the end of the file.
     pub fn open(path: &Path) -> Result<Self> {
-        let mut file =
+        let file =
             File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
-        let archive_size = file
+        Self::from_seekable(file)
+            .with_context(|| format!("reading tarzan archive {}", path.display()))
+    }
+
+    /// Opens a tarzan archive from any seekable byte source — a file, an
+    /// in-memory [`Cursor`](std::io::Cursor), or a custom reader backed by
+    /// HTTP range requests.
+    ///
+    /// The identity frame and TOC are read up front (a seek to the end of the
+    /// source and back); member data is read lazily by `extract_member` and
+    /// the `verify` methods. Each member's chunk byte ranges
+    /// (`compressed_offset` / `compressed_size`) are then available via
+    /// [`members`](Self::members), so a caller can fetch them in parallel.
+    pub fn from_seekable<S: Read + Seek + 'static>(mut source: S) -> Result<Self> {
+        let archive_size = source
             .seek(SeekFrom::End(0))
             .context("failed to seek to end of archive")?;
-        let identity_version = read_identity_frame(&mut file)
-            .with_context(|| format!("invalid identity frame in {}", path.display()))?;
-        let toc = find_toc(&mut file, archive_size)
-            .with_context(|| format!("no tarzan TOC found in {}", path.display()))?;
+        let identity_version =
+            read_identity_frame(&mut source).context("invalid identity frame")?;
+        let toc = find_toc(&mut source, archive_size).context("no tarzan TOC found")?;
         Ok(Self {
-            path: path.to_owned(),
+            source: RefCell::new(Box::new(source)),
             members: toc.members,
             archive_size,
             toc_offset: toc.offset,
@@ -114,8 +135,7 @@ impl TarzanReader {
         // chunks: skip past any extension headers and the 512-byte tar header.
         let data_offset = member.tar_offset - chunk_tar_start + 512;
 
-        let mut file = File::open(&self.path)
-            .with_context(|| format!("failed to open {}", self.path.display()))?;
+        let mut source = self.source.borrow_mut();
 
         let mut skip = data_offset;
         let mut remaining = member.size;
@@ -128,9 +148,10 @@ impl TarzanReader {
                 continue;
             }
 
-            file.seek(SeekFrom::Start(chunk.compressed_offset))
+            source
+                .seek(SeekFrom::Start(chunk.compressed_offset))
                 .context("failed to seek to chunk")?;
-            let limited = (&mut file).take(chunk.compressed_size);
+            let limited = (&mut *source).take(chunk.compressed_size);
             let mut decoder =
                 zstd::stream::read::Decoder::new(limited).context("failed to create zstd decoder")?;
 
@@ -154,9 +175,8 @@ impl TarzanReader {
 
     /// Verifies the SHA-256 checksum of every chunk in every member.
     pub fn verify_all(&self) -> Result<Vec<VerifyRecord>> {
-        let mut file = File::open(&self.path)
-            .with_context(|| format!("failed to open {}", self.path.display()))?;
-        verify_members(&mut file, self.members.iter())
+        let mut source = self.source.borrow_mut();
+        verify_members(&mut *source, self.members.iter())
     }
 
     /// Verifies the SHA-256 checksums for the single member at `target_path`.
@@ -166,14 +186,13 @@ impl TarzanReader {
             .iter()
             .find(|m| m.path == target_path)
             .ok_or_else(|| anyhow::anyhow!("path not found in archive: {target_path}"))?;
-        let mut file = File::open(&self.path)
-            .with_context(|| format!("failed to open {}", self.path.display()))?;
-        verify_members(&mut file, std::iter::once(member))
+        let mut source = self.source.borrow_mut();
+        verify_members(&mut *source, std::iter::once(member))
     }
 }
 
-fn verify_members<'a>(
-    file: &mut File,
+fn verify_members<'a, R: Read + Seek>(
+    file: &mut R,
     members: impl Iterator<Item = &'a TocMember>,
 ) -> Result<Vec<VerifyRecord>> {
     let mut results = Vec::new();
@@ -244,7 +263,7 @@ struct TocLocation {
     frame_size: u64,
 }
 
-fn find_toc(file: &mut File, file_size: u64) -> Result<TocLocation> {
+fn find_toc<R: Read + Seek>(file: &mut R, file_size: u64) -> Result<TocLocation> {
     if file_size < 8 {
         bail!("file too small to be a tarzan archive");
     }
@@ -288,7 +307,7 @@ fn find_toc(file: &mut File, file_size: u64) -> Result<TocLocation> {
 }
 
 /// Reads and validates the leading identity frame, returning its version byte.
-fn read_identity_frame(file: &mut File) -> Result<u8> {
+fn read_identity_frame<R: Read + Seek>(file: &mut R) -> Result<u8> {
     file.seek(SeekFrom::Start(0))
         .context("failed to seek to start of archive")?;
     let mut header = [0u8; 8];

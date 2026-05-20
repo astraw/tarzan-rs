@@ -187,6 +187,30 @@ fn grouping_splits_into_several_frames_at_chunk_size() {
     }
 }
 
+#[test]
+fn reader_opens_from_a_non_file_source() {
+    // Wrap entirely in memory, then read it back through a non-file,
+    // seekable source — the path an HTTP-range-backed reader would take.
+    let (tar, data) = big_file_tar("big.bin", 100 * 1024);
+    let mut wrapped = Vec::new();
+    let opts = tarzan::WrapOptions::default().chunk_size(16 * 1024);
+    tarzan::wrap(Cursor::new(&tar), &mut wrapped, opts).expect("wrap should succeed");
+
+    let reader = tarzan::TarzanReader::from_seekable(Cursor::new(wrapped))
+        .expect("from_seekable should open an in-memory archive");
+    assert!(reader.members().iter().any(|m| m.path == "big.bin"));
+
+    let mut extracted = Vec::new();
+    reader
+        .extract_member("big.bin", &mut extracted)
+        .expect("extract should succeed");
+    assert_eq!(extracted, data, "extracted data must match the original");
+
+    for record in reader.verify_all().expect("verify should succeed") {
+        assert!(matches!(record.status, tarzan::VerifyStatus::Ok));
+    }
+}
+
 /// A reader that records the running total of bytes it has served.
 struct CountingReader {
     data: Vec<u8>,
