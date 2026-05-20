@@ -112,6 +112,47 @@ fn info_member_count_matches_list() {
 }
 
 #[test]
+fn info_json_emits_object_with_expected_keys() {
+    let temp = tempdir().expect("tempdir");
+    let archive = create_archive(&temp);
+
+    let output = Command::new(tarzan_bin())
+        .args(["info", "--json", "-f"])
+        .arg(&archive)
+        .output()
+        .expect("info --json");
+    assert!(output.status.success(), "info --json failed");
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&stdout).expect("valid JSON");
+    let obj = parsed.as_object().expect("top-level object");
+
+    for key in [
+        "format_version",
+        "file",
+        "size_bytes",
+        "uncompressed_bytes",
+        "data_frame_bytes",
+        "members",
+        "chunks",
+        "toc_offset",
+        "toc_frame_bytes",
+    ] {
+        assert!(obj.contains_key(key), "JSON missing key `{key}`: {stdout}");
+    }
+
+    // member count in JSON should match `tarzan list` line count.
+    let json_members = obj.get("members").unwrap().as_u64().unwrap();
+    let list_out = Command::new(tarzan_bin())
+        .args(["list", "-f"])
+        .arg(&archive)
+        .output()
+        .expect("list");
+    let list_count = String::from_utf8(list_out.stdout).unwrap().lines().count() as u64;
+    assert_eq!(json_members, list_count, "members count mismatch");
+}
+
+#[test]
 fn info_rejects_non_tarzan_file() {
     let temp = tempdir().expect("tempdir");
     let junk = temp.path().join("not-an-archive.bin");

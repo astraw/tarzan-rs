@@ -196,6 +196,130 @@ fn extract_restores_file_mtime() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn extract_restores_hard_links() {
+    use std::os::unix::fs::MetadataExt;
+
+    let temp = tempdir().expect("tempdir");
+    let src = temp.path().join("src");
+    fs::create_dir(&src).unwrap();
+    fs::write(src.join("original.txt"), b"shared content").unwrap();
+    fs::hard_link(src.join("original.txt"), src.join("link.txt")).unwrap();
+
+    let tar_path = temp.path().join("input.tar");
+    let status = Command::new("tar")
+        .arg("-cf")
+        .arg(&tar_path)
+        .arg("-C")
+        .arg(&src)
+        .arg(".")
+        .status()
+        .expect("tar");
+    assert!(status.success());
+
+    let archive = temp.path().join("a.tar.zst");
+    let status = Command::new(tarzan_bin())
+        .arg("wrap")
+        .arg(&tar_path)
+        .arg("-f")
+        .arg(&archive)
+        .status()
+        .expect("wrap");
+    assert!(status.success());
+
+    let dest = temp.path().join("out");
+    let status = Command::new(tarzan_bin())
+        .args(["extract", "-f"])
+        .arg(&archive)
+        .arg("-C")
+        .arg(&dest)
+        .status()
+        .expect("extract");
+    assert!(status.success());
+
+    let orig = fs::metadata(dest.join("original.txt")).expect("original.txt");
+    let link = fs::metadata(dest.join("link.txt")).expect("link.txt");
+    assert_eq!(
+        orig.ino(),
+        link.ino(),
+        "hard-linked entries should share an inode after extraction"
+    );
+    assert_eq!(
+        fs::read(dest.join("link.txt")).unwrap(),
+        b"shared content",
+        "hard link should expose the shared content"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn extract_no_mtime_keeps_current_time() {
+    use std::os::unix::fs::MetadataExt;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let temp = tempdir().expect("tempdir");
+    let src = temp.path().join("src");
+    fs::create_dir(&src).unwrap();
+    fs::write(src.join("file.txt"), b"hi").unwrap();
+
+    let stamped: i64 = 1_500_000_000; // 2017-07-14, clearly in the past
+    let ft = filetime::FileTime::from_unix_time(stamped, 0);
+    filetime::set_file_mtime(src.join("file.txt"), ft).unwrap();
+
+    let tar_path = temp.path().join("input.tar");
+    assert!(
+        Command::new("tar")
+            .arg("-cf")
+            .arg(&tar_path)
+            .arg("-C")
+            .arg(&src)
+            .arg(".")
+            .status()
+            .expect("tar")
+            .success()
+    );
+
+    let archive = temp.path().join("a.tar.zst");
+    assert!(
+        Command::new(tarzan_bin())
+            .arg("wrap")
+            .arg(&tar_path)
+            .arg("-f")
+            .arg(&archive)
+            .status()
+            .expect("wrap")
+            .success()
+    );
+
+    let dest = temp.path().join("out");
+    assert!(
+        Command::new(tarzan_bin())
+            .args(["extract", "-f"])
+            .arg(&archive)
+            .arg("-C")
+            .arg(&dest)
+            .arg("--no-mtime")
+            .status()
+            .expect("extract")
+            .success()
+    );
+
+    let mtime = fs::metadata(dest.join("file.txt")).unwrap().mtime();
+    assert_ne!(
+        mtime, stamped,
+        "--no-mtime should not restore the recorded timestamp"
+    );
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    assert!(
+        (now - mtime).abs() < 120,
+        "with --no-mtime the file should carry a fresh timestamp (got {mtime}, now {now})"
+    );
+}
+
 #[test]
 fn extract_exclude_pattern() {
     let temp = tempdir().expect("tempdir");

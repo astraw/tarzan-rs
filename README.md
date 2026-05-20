@@ -255,18 +255,23 @@ tarzan extract -f archive.tar.zst --exclude '*.o' --exclude 'target/*'
 
 # Print each member as it is extracted
 tarzan x -v -f archive.tar.zst
+
+# Do not restore recorded mtimes (extracted files get the current time)
+tarzan extract -f archive.tar.zst --no-mtime
 ```
 
 Restored on extract: file contents, directory hierarchy, Unix permission
-bits, symlinks (Unix only), and mtime on files, symlinks, and directories.
-Directory mtimes are applied in a deferred pass after all children are
-written, so creating a child doesn't bump the parent's timestamp back.
-Hard links, character/block devices, and FIFOs are currently skipped
-with a warning.
+bits, symlinks (Unix only), hard links, and mtime on files, symlinks, and
+directories. Directory mtimes are applied in a deferred pass after all
+children are written, so creating a child doesn't bump the parent's
+timestamp back; hard links are likewise reconstructed in a second pass
+once their target file is on disk. `--no-mtime` skips timestamp
+restoration entirely. Character/block devices and FIFOs are still
+skipped with a warning.
 
-For workflows that need full fidelity — hard links, device files, FIFOs,
-xattrs/ACLs, sparse files — fall back to standard tooling. Every tarzan
-archive is a valid zstd stream:
+For workflows that need full fidelity — device files, FIFOs, xattrs/ACLs,
+sparse files — fall back to standard tooling. Every tarzan archive is a
+valid zstd stream:
 
 ```sh
 zstd -d archive.tar.zst | tar x
@@ -307,6 +312,9 @@ archive size.
 
 ```sh
 tarzan info -f archive.tar.zst
+
+# Machine-readable JSON object
+tarzan info --json -f archive.tar.zst
 ```
 
 ```
@@ -321,6 +329,26 @@ Chunks:          4203
 Avg chunk size:  574.5 KB (uncompressed)
 Identity frame:  TRZN v1
 TOC frame:       312.0 KB at offset 487204816
+```
+
+With `--json`, the same data is emitted as an object (`ratio` and
+`avg_chunk_size_bytes` are `null` for an empty archive):
+
+```json
+{
+  "format_version": 1,
+  "identity_version": 1,
+  "file": "archive.tar.zst",
+  "size_bytes": 510656512,
+  "uncompressed_bytes": 2480619520,
+  "data_frame_bytes": 509939712,
+  "ratio": 0.2058,
+  "members": 1847,
+  "chunks": 4203,
+  "avg_chunk_size_bytes": 590201,
+  "toc_offset": 487204816,
+  "toc_frame_bytes": 319488
+}
 ```
 
 Some fields the legacy README example referenced are intentionally

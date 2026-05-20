@@ -5,7 +5,7 @@ use tarzan::TarzanReader;
 
 use crate::util::format_size;
 
-pub fn run(archive: &Path) -> Result<()> {
+pub fn run(archive: &Path, json: bool) -> Result<()> {
     let reader = TarzanReader::open(archive)?;
 
     let members = reader.members();
@@ -26,15 +26,36 @@ pub fn run(archive: &Path) -> Result<()> {
     let toc_frame_size = reader.toc_frame_size();
     let identity_version = reader.identity_version();
 
-    let ratio = if uncompressed > 0 {
-        format!("{:.1}%", 100.0 * archive_size as f64 / uncompressed as f64)
-    } else {
-        "n/a".to_owned()
+    let ratio_value: Option<f64> = (uncompressed > 0)
+        .then(|| archive_size as f64 / uncompressed as f64);
+    let avg_chunk_bytes: Option<u64> = (chunk_count > 0).then(|| uncompressed / chunk_count);
+
+    if json {
+        let obj = serde_json::json!({
+            "format_version": identity_version,
+            "identity_version": identity_version,
+            "file": archive.display().to_string(),
+            "size_bytes": archive_size,
+            "uncompressed_bytes": uncompressed,
+            "data_frame_bytes": compressed,
+            "ratio": ratio_value,
+            "members": member_count,
+            "chunks": chunk_count,
+            "avg_chunk_size_bytes": avg_chunk_bytes,
+            "toc_offset": toc_offset,
+            "toc_frame_bytes": toc_frame_size,
+        });
+        println!("{}", serde_json::to_string_pretty(&obj)?);
+        return Ok(());
+    }
+
+    let ratio = match ratio_value {
+        Some(r) => format!("{:.1}%", 100.0 * r),
+        None => "n/a".to_owned(),
     };
-    let avg_chunk = if chunk_count > 0 {
-        format_size(uncompressed / chunk_count)
-    } else {
-        "n/a".to_owned()
+    let avg_chunk = match avg_chunk_bytes {
+        Some(b) => format_size(b),
+        None => "n/a".to_owned(),
     };
 
     println!("Format:          tarzan v{identity_version}");

@@ -133,6 +133,12 @@ enum Commands {
         #[arg(long = "exclude", value_name = "PATTERN")]
         exclude: Vec<String>,
 
+        /// Do not restore recorded modification times; extracted
+        /// entries keep whatever timestamp the filesystem assigns at
+        /// creation.
+        #[arg(long = "no-mtime")]
+        no_mtime: bool,
+
         /// Print each member to stderr as it is extracted.
         #[arg(short = 'v', long = "verbose")]
         verbose: bool,
@@ -153,6 +159,10 @@ enum Commands {
         /// Archive to inspect.
         #[arg(short = 'f', long = "file", value_name = "ARCHIVE")]
         file: PathBuf,
+
+        /// Emit metadata as a JSON object instead of the text table.
+        #[arg(long = "json")]
+        json: bool,
     },
 
     /// Verify SHA-256 checksums recorded in the TOC.
@@ -240,7 +250,7 @@ fn main() -> Result<()> {
                 verbose,
             )
         }
-        Commands::Info { file } => cmd_info::run(&file),
+        Commands::Info { file, json } => cmd_info::run(&file, json),
         Commands::List {
             file,
             verbose,
@@ -253,6 +263,7 @@ fn main() -> Result<()> {
             directory,
             strip_components,
             exclude,
+            no_mtime,
             verbose,
             paths,
         } => cmd_extract::run(
@@ -261,6 +272,7 @@ fn main() -> Result<()> {
             strip_components,
             exclude,
             paths,
+            !no_mtime,
             verbose,
         ),
         Commands::Verify {

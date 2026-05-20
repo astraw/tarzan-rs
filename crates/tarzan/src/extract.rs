@@ -12,7 +12,7 @@ use crate::format::toc::{EntryType, TocMember};
 use crate::reader::TarzanReader;
 
 /// Options controlling [`TarzanReader::extract_to_dir`].
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct ExtractOptions {
     /// Number of leading path components to drop from each member, like
     /// `tar --strip-components=N`. Members with too few components after
@@ -23,6 +23,32 @@ pub struct ExtractOptions {
     /// If non-empty, only members matching at least one pattern by exact
     /// path, directory-prefix, or shell-glob are extracted.
     pub includes: Vec<String>,
+    /// Restore each member's recorded mtime. When false, extracted
+    /// entries keep whatever timestamp the filesystem assigns at
+    /// creation. Defaults to true.
+    pub restore_mtime: bool,
+}
+
+impl Default for ExtractOptions {
+    fn default() -> Self {
+        Self {
+            strip_components: 0,
+            excludes: Vec::new(),
+            includes: Vec::new(),
+            restore_mtime: true,
+        }
+    }
+}
+
+/// Filesystem actions deferred to a second pass after the main walk:
+/// directory mtimes (children must be in place first) and hard links
+/// (their target file must be extracted first).
+#[derive(Default)]
+struct Deferred {
+    /// (directory path, mtime to apply)
+    dir_times: Vec<(PathBuf, FileTime)>,
+    /// (member path for diagnostics, link source, link target)
+    hard_links: Vec<(String, PathBuf, PathBuf)>,
 }
 
 impl TarzanReader {
@@ -32,8 +58,8 @@ impl TarzanReader {
     /// Refuses to extract members whose path is absolute or contains a
     /// `..` component, to keep the result inside `dest`.
     ///
-    /// Hard links, character/block devices, and FIFOs are currently
-    /// skipped with a warning.
+    /// Hard links are reconstructed once their target file is on disk.
+    /// Character/block devices and FIFOs are skipped with a warning.
     ///
     /// `on_extracted` is invoked after each member is successfully
     /// written, with the member's archive path. Useful for verbose
@@ -54,10 +80,7 @@ impl TarzanReader {
         fs::create_dir_all(dest)
             .with_context(|| format!("creating destination {}", dest.display()))?;
 
-        // Directory mtimes have to be applied after all children are
-        // written, because creating a child file or subdir bumps the
-        // parent's mtime back to "now". Collect them here, apply at end.
-        let mut deferred_dir_times: Vec<(PathBuf, FileTime)> = Vec::new();
+        let mut deferred = Deferred::default();
 
         for member in self.members() {
             if !includes.matches(&member.path) {
@@ -71,11 +94,40 @@ impl TarzanReader {
                 _ => continue,
             };
             let target = dest.join(&rel);
-            self.extract_one(member, &target, &mut deferred_dir_times)?;
+            self.extract_one(member, &target, dest, opts, &mut deferred)?;
             on_extracted(&member.path);
         }
 
-        for (path, mtime) in deferred_dir_times {
+        // Hard links: every regular file is on disk now, so their targets
+        // resolve. Created before directory mtimes are stamped, since
+        // adding a link bumps the containing directory's mtime.
+        for (member_path, source, target) in deferred.hard_links {
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent)
+                    .with_context(|| format!("creating {}", parent.display()))?;
+            }
+            if !source.exists() {
+                warn!(
+                    path = %member_path,
+                    source = %source.display(),
+                    "hard-link target was not extracted; skipping"
+                );
+                continue;
+            }
+            // Replace any existing entry so hard_link does not fail with EEXIST.
+            let _ = fs::remove_file(&target);
+            fs::hard_link(&source, &target).with_context(|| {
+                format!(
+                    "creating hard link {} -> {}",
+                    target.display(),
+                    source.display()
+                )
+            })?;
+        }
+
+        // Directory mtimes last: writing children (files, subdirs, hard
+        // links) bumps the parent's mtime back to "now".
+        for (path, mtime) in deferred.dir_times {
             filetime::set_file_mtime(&path, mtime).with_context(|| {
                 format!("setting mtime on directory {}", path.display())
             })?;
@@ -88,7 +140,9 @@ impl TarzanReader {
         &self,
         member: &TocMember,
         target: &Path,
-        deferred_dir_times: &mut Vec<(PathBuf, FileTime)>,
+        dest: &Path,
+        opts: &ExtractOptions,
+        deferred: &mut Deferred,
     ) -> Result<()> {
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)
@@ -100,7 +154,9 @@ impl TarzanReader {
                 fs::create_dir_all(target)
                     .with_context(|| format!("creating dir {}", target.display()))?;
                 set_unix_mode(target, member.mode)?;
-                deferred_dir_times.push((target.to_path_buf(), mtime));
+                if opts.restore_mtime {
+                    deferred.dir_times.push((target.to_path_buf(), mtime));
+                }
             }
             EntryType::File => {
                 let file = File::create(target)
@@ -109,8 +165,10 @@ impl TarzanReader {
                 self.extract_member(&member.path, &mut writer)?;
                 writer.flush()?;
                 set_unix_mode(target, member.mode)?;
-                filetime::set_file_mtime(target, mtime)
-                    .with_context(|| format!("setting mtime on {}", target.display()))?;
+                if opts.restore_mtime {
+                    filetime::set_file_mtime(target, mtime)
+                        .with_context(|| format!("setting mtime on {}", target.display()))?;
+                }
             }
             EntryType::Symlink => {
                 let link_target = member
@@ -118,15 +176,36 @@ impl TarzanReader {
                     .as_deref()
                     .ok_or_else(|| anyhow!("symlink {} has no link_target", member.path))?;
                 create_symlink(link_target, target)?;
-                // Use mtime for both atime and mtime; the TOC doesn't
-                // record atime separately, and most filesystems don't
-                // accurately preserve it anyway.
-                filetime::set_symlink_file_times(target, mtime, mtime).with_context(|| {
-                    format!("setting mtime on symlink {}", target.display())
-                })?;
+                if opts.restore_mtime {
+                    // Use mtime for both atime and mtime; the TOC doesn't
+                    // record atime separately, and most filesystems don't
+                    // accurately preserve it anyway.
+                    filetime::set_symlink_file_times(target, mtime, mtime).with_context(
+                        || format!("setting mtime on symlink {}", target.display()),
+                    )?;
+                }
             }
             EntryType::HardLink => {
-                warn!(path = %member.path, "skipping hard-link extraction (not yet supported)");
+                // The link's target is another member, by archive path.
+                // Defer creation until that file has been written; no
+                // mtime fixup — a hard link shares the target's inode,
+                // which already carries the right timestamp.
+                let link_target = member.link_target.as_deref().ok_or_else(|| {
+                    anyhow!("hard link {} has no link_target", member.path)
+                })?;
+                match normalize_member_path(link_target, opts.strip_components)? {
+                    Some(src_rel) if !src_rel.as_os_str().is_empty() => {
+                        deferred.hard_links.push((
+                            member.path.clone(),
+                            dest.join(src_rel),
+                            target.to_path_buf(),
+                        ));
+                    }
+                    _ => warn!(
+                        path = %member.path,
+                        "hard-link target stripped away; skipping"
+                    ),
+                }
             }
             EntryType::CharDevice
             | EntryType::BlockDevice

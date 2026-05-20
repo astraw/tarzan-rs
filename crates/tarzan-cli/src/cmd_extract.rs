@@ -9,6 +9,7 @@ pub fn run(
     strip_components: usize,
     excludes: Vec<String>,
     includes: Vec<String>,
+    restore_mtime: bool,
     verbose: bool,
 ) -> Result<()> {
     let reader = TarzanReader::open(archive)?;
@@ -16,6 +17,7 @@ pub fn run(
         strip_components,
         excludes,
         includes,
+        restore_mtime,
     };
     reader.extract_to_dir(dest, &opts, |path| {
         if verbose {
