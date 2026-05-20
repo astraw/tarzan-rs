@@ -123,7 +123,7 @@ git archive HEAD | tarzan wrap -f release.tar.zst
 # Remote backup
 ssh user@host "tar -cf - /data" | tarzan wrap -f backup.tar.zst
 
-# Verbose: list each member to stderr after wrapping
+# Verbose: list each member to stderr as it is wrapped
 tar -cf - ./dir | tarzan wrap -v -f archive.tar.zst
 ```
 
@@ -388,9 +388,9 @@ A tarzan archive is a valid zstd stream consisting of three sections:
 ├─────────────────────────────────────────────────────────┤
 │  Compressed data frames                                  │
 │  One or more independent zstd frames per tar member.    │
-│  Each frame corresponds to one chunk of one member.     │
-│  Large members are split at --chunk-size boundaries.    │
-│  Small members may be grouped into a single frame.      │
+│  Each frame holds one chunk of one member.              │
+│  Large members are split at --chunk-size boundaries;    │
+│  a small member is a single chunk.                      │
 ├─────────────────────────────────────────────────────────┤
 │  TOC frame (skippable)                                  │
 │  Magic: 0x184D2A54  Content: zstd-compressed JSON TOC   │

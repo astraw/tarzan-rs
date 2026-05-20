@@ -106,9 +106,14 @@ fn toc_contains_expected_entries() {
         "TOC should have at least one member"
     );
 
-    // Every member must have exactly one chunk (the single big frame used in MVP).
+    // Every fixture member is far smaller than the default chunk size, so each
+    // fits in a single chunk. (Members larger than chunk_size span several.)
     for member in &toc.members {
-        assert_eq!(member.chunks.len(), 1, "MVP produces one chunk per member");
+        assert_eq!(
+            member.chunks.len(),
+            1,
+            "small members should fit in one chunk"
+        );
         let chunk = &member.chunks[0];
         assert!(
             chunk.compressed_size > 0,

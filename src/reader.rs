@@ -82,8 +82,10 @@ impl TarzanReader {
 
     /// Extracts the file data for `target_path` to `out`.
     ///
-    /// Seeks directly to the member's compressed chunk; decompresses only that chunk.
-    /// Returns an error if the path is not found or the member is not a regular file.
+    /// Seeks directly to the member's compressed chunks; decompresses only
+    /// those chunks. A member whose data exceeds the wrap-time chunk size
+    /// spans several chunks, which are decoded in sequence. Returns an error
+    /// if the path is not found or the member is not a regular file.
     pub fn extract_member(&self, target_path: &str, out: &mut dyn Write) -> Result<()> {
         let (member_idx, member) = self
             .members
@@ -95,11 +97,9 @@ impl TarzanReader {
         if !matches!(member.entry_type, EntryType::File) {
             bail!("{target_path} is not a regular file");
         }
-
-        let chunk = member
-            .chunks
-            .first()
-            .ok_or_else(|| anyhow::anyhow!("member has no chunks: {target_path}"))?;
+        if member.chunks.is_empty() {
+            bail!("member has no chunks: {target_path}");
+        }
 
         // Chunks are contiguous in the raw tar stream. chunk_tar_start is the sum of
         // uncompressed sizes of all chunks in all preceding members.
@@ -109,22 +109,42 @@ impl TarzanReader {
             .map(|c| c.uncompressed_size)
             .sum();
 
-        // Skip past any extension headers before our entry header, then past the
-        // 512-byte tar header itself. What remains is the raw file data.
+        // Offset of the file data within the concatenation of this member's
+        // chunks: skip past any extension headers and the 512-byte tar header.
         let data_offset = member.tar_offset - chunk_tar_start + 512;
 
         let mut file = File::open(&self.path)
             .with_context(|| format!("failed to open {}", self.path.display()))?;
-        file.seek(SeekFrom::Start(chunk.compressed_offset))
-            .context("failed to seek to chunk")?;
 
-        let mut decoder =
-            zstd::stream::read::Decoder::new(&mut file).context("failed to create zstd decoder")?;
+        let mut skip = data_offset;
+        let mut remaining = member.size;
+        for chunk in &member.chunks {
+            if remaining == 0 {
+                break;
+            }
+            if skip >= chunk.uncompressed_size {
+                skip -= chunk.uncompressed_size;
+                continue;
+            }
 
-        crate::io::skip_exact(&mut decoder, data_offset)
-            .context("failed to skip to file data in chunk")?;
-        crate::io::copy_exact(&mut decoder, out, member.size)
-            .context("failed to copy file data")?;
+            file.seek(SeekFrom::Start(chunk.compressed_offset))
+                .context("failed to seek to chunk")?;
+            let limited = (&mut file).take(chunk.compressed_size);
+            let mut decoder =
+                zstd::stream::read::Decoder::new(limited).context("failed to create zstd decoder")?;
+
+            crate::io::skip_exact(&mut decoder, skip)
+                .context("failed to skip to file data in chunk")?;
+            let available = chunk.uncompressed_size - skip;
+            let take = available.min(remaining);
+            crate::io::copy_exact(&mut decoder, out, take).context("failed to copy file data")?;
+            skip = 0;
+            remaining -= take;
+        }
+
+        if remaining != 0 {
+            bail!("archive truncated: {target_path} is missing {remaining} bytes of data");
+        }
 
         Ok(())
     }
