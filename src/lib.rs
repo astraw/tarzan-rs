@@ -1,3 +1,5 @@
+#![doc = include_str!("../README.md")]
+
 mod extract;
 pub mod filter;
 pub mod format;

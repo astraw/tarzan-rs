@@ -1,3 +1,16 @@
-tarzan archive v1
-:B 54 2A 4D 18
-: a TRZN
+# magic(5) pattern for tarzan archives — random-access, seekable .tar.zst
+# with an embedded table-of-contents index.
+# https://github.com/astraw/tarzan-rs
+#
+# Layout of the leading identity frame:
+#   offset 0   lelong  0x184d2a54   zstd skippable-frame magic
+#   offset 4   lelong               skippable-frame payload size
+#   offset 8   string  "TRZN"       tarzan payload identifier
+#   offset 12  byte    0x01         frame type (identity)
+#   offset 13  byte                 format version
+#
+0	lelong		0x184d2a54
+>8	string		TRZN
+>>12	byte		1
+>>>13	byte		x		tarzan archive v%d
+!:mime	application/x-tarzan

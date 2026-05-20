@@ -66,6 +66,9 @@ The result is an archive where:
 
 ## Installation
 
+`tarzan` is a single crate that provides both the `tarzan` command-line binary
+and the embeddable library (see [Library usage](#library-usage)).
+
 ### From crates.io
 
 ```sh
@@ -186,7 +189,7 @@ tarzan list --json -f archive.tar.zst
 ```
 
 Long-format output:
-```
+```text
 drwxr-xr-x 1000/1000         0 B  2024-11-03 14:20  ./
 -rw-r--r-- 1000/1000      4.2 KB  2024-11-03 14:22  src/main.rs
 -rw-r--r-- 1000/1000     12.1 KB  2024-11-03 14:22  src/lib.rs
@@ -317,7 +320,7 @@ tarzan info -f archive.tar.zst
 tarzan info --json -f archive.tar.zst
 ```
 
-```
+```text
 Format:          tarzan v1
 File:            archive.tar.zst
 Size:            487.2 MB
@@ -378,7 +381,7 @@ tarzan verify -v -f archive.tar.zst
 
 A tarzan archive is a valid zstd stream consisting of three sections:
 
-```
+```text
 ┌─────────────────────────────────────────────────────────┐
 │  Identity frame (skippable)                             │
 │  Magic: 0x184D2A54  Content: "TRZN" + version byte      │
@@ -470,7 +473,7 @@ A magic pattern for tarzan archives is distributed with this repository at
 
 ```sh
 file -m contrib/tarzan.magic archive.tar.zst
-# archive.tar.zst: tarzan archive v1, 1847 members
+# archive.tar.zst: tarzan archive v1
 ```
 
 ---
@@ -529,28 +532,32 @@ The `tarzan` crate exposes a library API for embedding tarzan support in other t
 
 ```toml
 [dependencies]
-tarzan = "1.0"
+tarzan = "0.1"
 ```
 
-```rust
-use tarzan::{Writer, Reader, WrapOptions};
+```rust,no_run
+use tarzan::{TarzanReader, WrapOptions};
 use std::fs::File;
+use std::path::Path;
 
-// Wrap an existing tar stream
-let input = File::open("archive.tar")?;
-let output = File::create("archive.tar.zst")?;
-let opts = WrapOptions::default().chunk_size(4 * 1024 * 1024);
-tarzan::wrap(input, output, opts)?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Wrap an existing tar stream
+    let input = File::open("archive.tar")?;
+    let output = File::create("archive.tar.zst")?;
+    let opts = WrapOptions::default().chunk_size(4 * 1024 * 1024);
+    tarzan::wrap(input, output, opts)?;
 
-// Read the TOC without decompression
-let reader = Reader::open("archive.tar.zst")?;
-for entry in reader.entries() {
-    println!("{} ({} bytes)", entry.path(), entry.size());
+    // Read the TOC without decompression
+    let reader = TarzanReader::open(Path::new("archive.tar.zst"))?;
+    for member in reader.members() {
+        println!("{} ({} bytes)", member.path, member.size);
+    }
+
+    // Extract a single file
+    let mut out = File::create("main.rs")?;
+    reader.extract_member("src/main.rs", &mut out)?;
+    Ok(())
 }
-
-// Extract a single file
-let mut out = File::create("main.rs")?;
-reader.extract_file("src/main.rs", &mut out)?;
 ```
 
 Full API documentation is on [docs.rs/tarzan](https://docs.rs/tarzan).
@@ -625,7 +632,7 @@ documented, it has to be supported.
 is the wrong reference point. It redirects the `-v` listing to a file — bare paths
 at `-v`, `ls -l`-style lines at `-vv`:
 
-```
+```text
 drwxr-xr-x andrew/wheel      0 2026-05-18 16:29 ./
 -rw-r--r-- andrew/wheel     10 2026-05-18 16:29 ./b.txt
 -rw-r--r-- andrew/wheel      6 2026-05-18 16:29 ./sub/c.txt
@@ -656,4 +663,4 @@ Areas of particular interest:
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](./LICENSE).
