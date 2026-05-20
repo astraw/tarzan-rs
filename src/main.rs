@@ -81,6 +81,11 @@ enum Commands {
         #[arg(long = "json")]
         json: bool,
 
+        /// Show `-v` timestamps in UTC instead of local time, like
+        /// `tar --utc -tvf`.
+        #[arg(long = "utc")]
+        utc: bool,
+
         /// Restrict the listing to these paths or directory prefixes;
         /// omit to list everything. Matching is by exact path,
         /// directory-prefix, or shell glob.
@@ -255,8 +260,9 @@ fn main() -> Result<()> {
             file,
             verbose,
             json,
+            utc,
             paths,
-        } => cmd_list::run(&file, verbose, json, &paths),
+        } => cmd_list::run(&file, verbose, json, utc, &paths),
         Commands::Cat { file, path } => cmd_cat::run(&file, &path),
         Commands::Extract {
             file,

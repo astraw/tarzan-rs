@@ -67,7 +67,7 @@ pub fn run(archive: &Path, json: bool) -> Result<()> {
     println!("Uncompressed:    {}", format_size(uncompressed));
     println!("Ratio:           {ratio} (archive / uncompressed)");
     println!(
-        "Data frames:     {} (sum of compressed chunks)",
+        "Data frames:     {} (sum of compressed frames)",
         format_size(compressed)
     );
     println!("Members:         {member_count}");

@@ -586,6 +586,7 @@ dependencies = [
  "clap",
  "filetime",
  "glob",
+ "libc",
  "serde",
  "serde_json",
  "sha2",

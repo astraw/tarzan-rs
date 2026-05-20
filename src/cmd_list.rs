@@ -7,7 +7,7 @@ use tarzan::format::toc::{EntryType, TocMember};
 
 use crate::util::format_size;
 
-pub fn run(archive: &Path, verbose: bool, json: bool, paths: &[String]) -> Result<()> {
+pub fn run(archive: &Path, verbose: bool, json: bool, utc: bool, paths: &[String]) -> Result<()> {
     let reader = TarzanReader::open(archive)?;
     let filter = PathFilter::new(paths)?;
 
@@ -29,7 +29,7 @@ pub fn run(archive: &Path, verbose: bool, json: bool, paths: &[String]) -> Resul
             let mode = format_mode(type_char, member.mode);
             let owner = format!("{}/{}", member.uid, member.gid);
             let size = format_size(member.size);
-            let mtime = format_mtime(member.mtime);
+            let mtime = format_mtime(member.mtime, utc);
             let path = format_path_with_link(member);
             println!("{mode} {owner}  {size:>10}  {mtime}  {path}");
         } else {
@@ -80,13 +80,21 @@ fn format_mode(type_char: char, mode: u32) -> String {
     s
 }
 
-fn format_mtime(mtime: i64) -> String {
-    // Format Unix timestamp as YYYY-MM-DD HH:MM without pulling in a date library.
-    // Uses a simple algorithm valid for dates 1970-2106.
-    if mtime < 0 {
+/// Formats a Unix timestamp as `YYYY-MM-DD HH:MM`. Renders in local time
+/// (like `tar -tvf`) unless `utc` is set (like `tar --utc -tvf`).
+fn format_mtime(mtime: i64, utc: bool) -> String {
+    let shifted = if utc {
+        mtime
+    } else {
+        mtime.saturating_add(local_offset_seconds(mtime))
+    };
+
+    // Format the (already offset-adjusted) timestamp as broken-down time
+    // without pulling in a date library; valid for dates 1970-2106.
+    if shifted < 0 {
         return "????-??-?? ??:??".to_owned();
     }
-    let t = mtime as u64;
+    let t = shifted as u64;
     let secs_per_min = 60u64;
     let secs_per_hour = 3600u64;
     let secs_per_day = 86400u64;
@@ -134,4 +142,27 @@ fn format_mtime(mtime: i64) -> String {
 
 fn is_leap(year: u32) -> bool {
     (year.is_multiple_of(4) && !year.is_multiple_of(100)) || year.is_multiple_of(400)
+}
+
+/// Seconds east of UTC for the local timezone at instant `t`, consulting the
+/// system tz database (so historical DST is honored), matching `tar`'s
+/// `localtime`-based display. Returns 0 if the offset cannot be determined.
+#[cfg(unix)]
+fn local_offset_seconds(t: i64) -> i64 {
+    // SAFETY: `tm` is zero-initialized and passed by mutable pointer for
+    // `localtime_r` to fill; on success the struct is fully written.
+    unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        let tt = t as libc::time_t;
+        if libc::localtime_r(&tt, &mut tm).is_null() {
+            0
+        } else {
+            tm.tm_gmtoff as i64
+        }
+    }
+}
+
+#[cfg(not(unix))]
+fn local_offset_seconds(_t: i64) -> i64 {
+    0
 }

@@ -179,6 +179,9 @@ tarzan t -f archive.tar.zst
 # Symlink and hard-link entries show their target as `path -> target`.
 tarzan list -v -f archive.tar.zst
 
+# Show -v timestamps in UTC instead of local time, like `tar --utc -tvf`
+tarzan list -v --utc -f archive.tar.zst
+
 # Filter by directory prefix, exact path, or shell glob (positional args)
 tarzan list -f archive.tar.zst src/
 tarzan list -f archive.tar.zst '*.toml'
@@ -200,6 +203,10 @@ lrwxrwxrwx 1000/1000         0 B  2024-11-03 14:22  src/current -> main.rs
 Owner is shown numerically (`uid/gid`) rather than as resolved names —
 the TOC stores numbers, and resolving them against the *reader's*
 `/etc/passwd` would be misleading.
+
+Timestamps are shown in local time, like `tar -tvf`; pass `--utc` for
+UTC. The stored `mtime` is a timezone-independent Unix timestamp, so only
+the display differs.
 
 `--json` emits the TOC as a pretty-printed JSON array. Each entry
 carries path, type, size, mode, uid, gid, mtime, optional link target,
@@ -274,9 +281,11 @@ bits, symlinks (Unix only), hard links, and mtime on files, symlinks, and
 directories. Directory mtimes are applied in a deferred pass after all
 children are written, so creating a child doesn't bump the parent's
 timestamp back; hard links are likewise reconstructed in a second pass
-once their target file is on disk. `--no-mtime` skips timestamp
-restoration entirely. Character/block devices and FIFOs are still
-skipped with a warning.
+once their target file is on disk. If a hard link's target member is not
+part of the extraction — for example a path filter selects the link but
+not its target — the link is skipped with a warning. `--no-mtime` skips
+timestamp restoration entirely. Character/block devices and FIFOs are
+still skipped with a warning.
 
 For workflows that need full fidelity — device files, FIFOs, xattrs/ACLs,
 sparse files — fall back to standard tooling. Every tarzan archive is a
@@ -332,7 +341,7 @@ File:            archive.tar.zst
 Size:            487.2 MB
 Uncompressed:    2.3 GB
 Ratio:           21.1% (archive / uncompressed)
-Data frames:     486.4 MB (sum of compressed chunks)
+Data frames:     486.4 MB (sum of compressed frames)
 Members:         1847
 Chunks:          4203
 Avg chunk size:  574.5 KB (uncompressed)
