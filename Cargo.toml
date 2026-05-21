@@ -34,3 +34,8 @@ tempfile = "3.12"
 [[bin]]
 name = "tarzan"
 path = "src/main.rs"
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
