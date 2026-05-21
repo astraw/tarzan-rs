@@ -113,7 +113,12 @@ pub fn wrap<R: Read, W: Write>(input: R, output: W, opts: WrapOptions) -> Result
 /// Members smaller than `opts.chunk_size` are grouped together into a shared
 /// zstd frame, so a member is reported once the group it belongs to has been
 /// flushed.
-pub fn wrap_with<R, W, F>(input: R, mut output: W, opts: WrapOptions, mut on_member: F) -> Result<()>
+pub fn wrap_with<R, W, F>(
+    input: R,
+    mut output: W,
+    opts: WrapOptions,
+    mut on_member: F,
+) -> Result<()>
 where
     R: Read,
     W: Write,
@@ -500,7 +505,11 @@ fn compress_frame<W: Write>(
     };
     *pos += compressed_size;
 
-    Ok(Some((compressed_offset, compressed_size, sha256_hex(bytes))))
+    Ok(Some((
+        compressed_offset,
+        compressed_size,
+        sha256_hex(bytes),
+    )))
 }
 
 /// Reads an entry's metadata into a partial `TocMember` (with no `chunks`).

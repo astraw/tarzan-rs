@@ -20,7 +20,9 @@ pub fn run(archive: &Path, json: bool) -> Result<()> {
     // distinct frames (keyed by compressed offset) before counting and summing.
     let mut frames: HashMap<u64, u64> = HashMap::new();
     for chunk in members.iter().flat_map(|m| m.chunks.iter()) {
-        frames.entry(chunk.compressed_offset).or_insert(chunk.compressed_size);
+        frames
+            .entry(chunk.compressed_offset)
+            .or_insert(chunk.compressed_size);
     }
     let chunk_count = frames.len() as u64;
     let compressed: u64 = frames.values().sum();

@@ -156,7 +156,9 @@ fn small_members_are_packed_into_a_shared_frame() {
 
 #[test]
 fn grouping_splits_into_several_frames_at_chunk_size() {
-    let files: Vec<(String, Vec<u8>)> = (0..40).map(|i| (format!("f{i}"), vec![b'x'; 1000])).collect();
+    let files: Vec<(String, Vec<u8>)> = (0..40)
+        .map(|i| (format!("f{i}"), vec![b'x'; 1000]))
+        .collect();
     let refs: Vec<(&str, &[u8])> = files
         .iter()
         .map(|(n, d)| (n.as_str(), d.as_slice()))

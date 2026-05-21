@@ -37,7 +37,8 @@ fn tar_directory(dir: &Path, tar_path: &Path) {
 fn wrap_bytes(temp: &tempfile::TempDir, tar: &[u8]) -> PathBuf {
     let archive = temp.path().join("archive.tar.zst");
     let out = fs::File::create(&archive).expect("create archive");
-    tarzan::wrap(Cursor::new(tar), out, tarzan::WrapOptions::default()).expect("wrap should succeed");
+    tarzan::wrap(Cursor::new(tar), out, tarzan::WrapOptions::default())
+        .expect("wrap should succeed");
     archive
 }
 
