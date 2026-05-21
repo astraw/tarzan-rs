@@ -567,7 +567,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tarzan::wrap(input, output, opts)?;
 
     // Read the TOC without decompression
-    let reader = TarzanReader::open(Path::new("archive.tar.zst"))?;
+    let mut reader = TarzanReader::open(Path::new("archive.tar.zst"))?;
     for member in reader.members() {
         println!("{} ({} bytes)", member.path, member.size);
     }

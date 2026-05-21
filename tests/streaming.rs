@@ -62,7 +62,7 @@ fn large_member_is_split_into_multiple_chunks() {
     let out = std::fs::File::create(&archive_path).expect("create archive");
     tarzan::wrap(Cursor::new(&tar), out, opts).expect("wrap should succeed");
 
-    let reader = tarzan::TarzanReader::open(&archive_path).expect("open archive");
+    let mut reader = tarzan::TarzanReader::open(&archive_path).expect("open archive");
     let member = reader
         .members()
         .iter()
@@ -129,7 +129,7 @@ fn small_members_are_packed_into_a_shared_frame() {
     // The default chunk size dwarfs the whole archive: all members fit in one frame.
     tarzan::wrap(Cursor::new(&tar), out, tarzan::WrapOptions::default()).expect("wrap");
 
-    let reader = tarzan::TarzanReader::open(&archive_path).expect("open archive");
+    let mut reader = tarzan::TarzanReader::open(&archive_path).expect("open archive");
     assert_eq!(
         distinct_frames(&reader).len(),
         1,
@@ -170,7 +170,7 @@ fn grouping_splits_into_several_frames_at_chunk_size() {
     let opts = tarzan::WrapOptions::default().chunk_size(8 * 1024);
     tarzan::wrap(Cursor::new(&tar), out, opts).expect("wrap");
 
-    let reader = tarzan::TarzanReader::open(&archive_path).expect("open archive");
+    let mut reader = tarzan::TarzanReader::open(&archive_path).expect("open archive");
     let frames = distinct_frames(&reader).len();
     assert!(
         frames > 1 && frames < files.len(),
@@ -196,7 +196,7 @@ fn reader_opens_from_a_non_file_source() {
     let opts = tarzan::WrapOptions::default().chunk_size(16 * 1024);
     tarzan::wrap(Cursor::new(&tar), &mut wrapped, opts).expect("wrap should succeed");
 
-    let reader = tarzan::TarzanReader::from_seekable(Cursor::new(wrapped))
+    let mut reader = tarzan::TarzanReader::from_seekable(Cursor::new(wrapped))
         .expect("from_seekable should open an in-memory archive");
     assert!(reader.members().iter().any(|m| m.path == "big.bin"));
 

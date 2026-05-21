@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -20,8 +19,12 @@ trait ReadSeek: Read + Seek {}
 impl<T: Read + Seek> ReadSeek for T {}
 
 /// Reads a tarzan archive without decompressing the data frames.
+///
+/// Methods that touch the underlying byte source (`extract_member`, the
+/// `verify` methods) take `&mut self`, since reading a chunk seeks the
+/// source. Pure TOC accessors take `&self`.
 pub struct TarzanReader {
-    source: RefCell<Box<dyn ReadSeek>>,
+    source: Box<dyn ReadSeek>,
     members: Vec<TocMember>,
     archive_size: u64,
     toc_offset: u64,
@@ -69,7 +72,7 @@ impl TarzanReader {
             read_identity_frame(&mut source).context("invalid identity frame")?;
         let toc = find_toc(&mut source, archive_size).context("no tarzan TOC found")?;
         Ok(Self {
-            source: RefCell::new(Box::new(source)),
+            source: Box::new(source),
             members: toc.members,
             archive_size,
             toc_offset: toc.offset,
@@ -108,7 +111,7 @@ impl TarzanReader {
     /// those chunks. A member whose data exceeds the wrap-time chunk size
     /// spans several chunks, which are decoded in sequence. Returns an error
     /// if the path is not found or the member is not a regular file.
-    pub fn extract_member(&self, target_path: &str, out: &mut dyn Write) -> Result<()> {
+    pub fn extract_member(&mut self, target_path: &str, out: &mut dyn Write) -> Result<()> {
         let (member_idx, member) = self
             .members
             .iter()
@@ -135,7 +138,7 @@ impl TarzanReader {
         // chunks: skip past any extension headers and the 512-byte tar header.
         let data_offset = member.tar_offset - chunk_tar_start + 512;
 
-        let mut source = self.source.borrow_mut();
+        let source = &mut self.source;
 
         let mut skip = data_offset;
         let mut remaining = member.size;
@@ -174,20 +177,18 @@ impl TarzanReader {
     }
 
     /// Verifies the SHA-256 checksum of every chunk in every member.
-    pub fn verify_all(&self) -> Result<Vec<VerifyRecord>> {
-        let mut source = self.source.borrow_mut();
-        verify_members(&mut *source, self.members.iter())
+    pub fn verify_all(&mut self) -> Result<Vec<VerifyRecord>> {
+        verify_members(&mut self.source, self.members.iter())
     }
 
     /// Verifies the SHA-256 checksums for the single member at `target_path`.
-    pub fn verify_member(&self, target_path: &str) -> Result<Vec<VerifyRecord>> {
+    pub fn verify_member(&mut self, target_path: &str) -> Result<Vec<VerifyRecord>> {
         let member = self
             .members
             .iter()
             .find(|m| m.path == target_path)
             .ok_or_else(|| anyhow::anyhow!("path not found in archive: {target_path}"))?;
-        let mut source = self.source.borrow_mut();
-        verify_members(&mut *source, std::iter::once(member))
+        verify_members(&mut self.source, std::iter::once(member))
     }
 }
 

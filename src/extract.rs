@@ -65,7 +65,7 @@ impl TarzanReader {
     /// written, with the member's archive path. Useful for verbose
     /// progress output.
     pub fn extract_to_dir<F>(
-        &self,
+        &mut self,
         dest: &Path,
         opts: &ExtractOptions,
         mut on_extracted: F,
@@ -81,7 +81,10 @@ impl TarzanReader {
 
         let mut deferred = Deferred::default();
 
-        for member in self.members() {
+        // Clone the member list so the loop can call `&mut self` methods
+        // (extraction seeks the source) while iterating.
+        let members = self.members().to_vec();
+        for member in &members {
             if !includes.matches(&member.path) {
                 continue;
             }
@@ -135,7 +138,7 @@ impl TarzanReader {
     }
 
     fn extract_one(
-        &self,
+        &mut self,
         member: &TocMember,
         target: &Path,
         dest: &Path,

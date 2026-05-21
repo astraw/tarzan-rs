@@ -41,7 +41,7 @@ fn extract_member_returns_correct_bytes() {
     let raw = single_file_tar("hello.txt", content);
     let (_dir, path) = wrap_to_file(&raw);
 
-    let reader = TarzanReader::open(&path).expect("open");
+    let mut reader = TarzanReader::open(&path).expect("open");
     let mut out = Vec::new();
     reader
         .extract_member("hello.txt", &mut out)
@@ -54,7 +54,7 @@ fn extract_member_empty_file_yields_empty_bytes() {
     let raw = single_file_tar("empty.txt", b"");
     let (_dir, path) = wrap_to_file(&raw);
 
-    let reader = TarzanReader::open(&path).expect("open");
+    let mut reader = TarzanReader::open(&path).expect("open");
     let mut out = Vec::new();
     reader
         .extract_member("empty.txt", &mut out)
@@ -68,7 +68,7 @@ fn extract_member_binary_content_exact() {
     let raw = single_file_tar("binary.bin", &content);
     let (_dir, path) = wrap_to_file(&raw);
 
-    let reader = TarzanReader::open(&path).expect("open");
+    let mut reader = TarzanReader::open(&path).expect("open");
     let mut out = Vec::new();
     reader
         .extract_member("binary.bin", &mut out)
@@ -93,7 +93,7 @@ fn extract_member_second_entry_correct() {
     });
     let (_dir, path) = wrap_to_file(&raw);
 
-    let reader = TarzanReader::open(&path).expect("open");
+    let mut reader = TarzanReader::open(&path).expect("open");
 
     let mut out_a = Vec::new();
     reader
@@ -113,7 +113,7 @@ fn extract_member_missing_path_errors() {
     let raw = single_file_tar("exists.txt", b"data");
     let (_dir, path) = wrap_to_file(&raw);
 
-    let reader = TarzanReader::open(&path).expect("open");
+    let mut reader = TarzanReader::open(&path).expect("open");
     let mut out = Vec::new();
     let result = reader.extract_member("does_not_exist.txt", &mut out);
     assert!(result.is_err(), "expected error for missing path");
@@ -136,7 +136,7 @@ fn verify_all_passes_for_freshly_wrapped_archive() {
     });
     let (_dir, path) = wrap_to_file(&raw);
 
-    let reader = TarzanReader::open(&path).expect("open");
+    let mut reader = TarzanReader::open(&path).expect("open");
     let results = reader.verify_all().expect("verify");
 
     assert!(!results.is_empty(), "expected at least one verify record");
@@ -154,7 +154,7 @@ fn verify_member_passes_for_specific_file() {
     let raw = single_file_tar("check.txt", b"verify me");
     let (_dir, path) = wrap_to_file(&raw);
 
-    let reader = TarzanReader::open(&path).expect("open");
+    let mut reader = TarzanReader::open(&path).expect("open");
     let results = reader.verify_member("check.txt").expect("verify");
 
     assert!(!results.is_empty());

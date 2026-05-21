@@ -4,7 +4,7 @@ use anyhow::{Result, bail};
 use tarzan::{TarzanReader, VerifyStatus};
 
 pub fn run(archive: &Path, target_path: Option<&str>, verbose: bool) -> Result<()> {
-    let reader = TarzanReader::open(archive)?;
+    let mut reader = TarzanReader::open(archive)?;
 
     let records = match target_path {
         Some(path) => reader.verify_member(path)?,

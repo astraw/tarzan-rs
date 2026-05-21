@@ -5,7 +5,7 @@ use anyhow::Result;
 use tarzan::TarzanReader;
 
 pub fn run(archive: &Path, target_path: &str) -> Result<()> {
-    let reader = TarzanReader::open(archive)?;
+    let mut reader = TarzanReader::open(archive)?;
     let mut stdout = io::stdout().lock();
     reader.extract_member(target_path, &mut stdout)?;
     Ok(())

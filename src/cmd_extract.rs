@@ -12,7 +12,7 @@ pub fn run(
     restore_mtime: bool,
     verbose: bool,
 ) -> Result<()> {
-    let reader = TarzanReader::open(archive)?;
+    let mut reader = TarzanReader::open(archive)?;
     let opts = ExtractOptions {
         strip_components,
         excludes,
