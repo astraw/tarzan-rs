@@ -86,8 +86,14 @@ cargo build --release
 
 ### Pre-built binaries
 
-Pre-built static binaries for Linux (x86_64, aarch64) and macOS (x86_64, Apple
-Silicon) are available on the [releases page](https://github.com/astraw/tarzan-rs/releases).
+Pre-built binaries for Linux (x86_64, aarch64), macOS (x86_64, Apple Silicon),
+and Windows (x86_64) are available on the
+[releases page](https://github.com/astraw/tarzan-rs/releases).
+
+Windows builds are provided but **untested**, and have two known limitations:
+extracting an archive that contains symlink members fails on those entries, and
+Unix permission bits are not restored. (`list -v` also shows timestamps in UTC
+rather than local time on Windows.) Linux and macOS are the tested platforms.
 
 ---
 
