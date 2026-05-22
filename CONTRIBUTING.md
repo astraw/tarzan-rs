@@ -65,6 +65,20 @@ same file, or integration tests under `tests/`. Archive-format changes should
 keep the round-trip and standard-tool-interoperability tests passing — a tarzan
 archive must always remain decompressible by plain `zstd` and `tar`.
 
+## Third-party licenses
+
+`THIRD-PARTY-LICENSES` collects the license texts of the dependencies compiled
+into tarzan; it is bundled into every release archive. If you add, remove, or
+upgrade a dependency, regenerate it:
+
+```sh
+cargo bundle-licenses --format yaml --prefer MIT --output THIRD-PARTY-LICENSES
+```
+
+Then re-add the hand-maintained `libzstd` entry at the end — the libzstd C
+library is vendored inside the `zstd-sys` crate rather than being a separate
+Cargo dependency, so the generator cannot see it.
+
 ## What to work on
 
 The README's [Contributing](README.md#contributing) section lists areas of

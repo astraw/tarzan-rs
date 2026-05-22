@@ -696,4 +696,7 @@ Licensed under either of
 at your option.
 
 tarzan binaries statically include the zstd C library. The zstd C library is
-under a dual BSD/GPLv2 license.
+under a dual BSD/GPLv2 license. Full license texts for zstd and every other
+dependency compiled into tarzan are in
+[THIRD-PARTY-LICENSES](./THIRD-PARTY-LICENSES), which is bundled in every
+release archive.
