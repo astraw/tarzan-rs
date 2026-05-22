@@ -688,4 +688,12 @@ Areas of particular interest:
 
 ## License
 
-MIT. See [LICENSE](./LICENSE).
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](./LICENSE-APACHE))
+- MIT License ([LICENSE-MIT](./LICENSE-MIT))
+
+at your option.
+
+tarzan binaries statically include the zstd C library. The zstd C library is
+under a dual BSD/GPLv2 license.

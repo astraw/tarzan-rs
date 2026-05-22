@@ -73,5 +73,8 @@ discuss the approach is appreciated.
 
 ## License
 
-By contributing, you agree that your contributions are licensed under the MIT
-License, the same as the rest of the project (see [`LICENSE`](LICENSE)).
+tarzan is dual-licensed under [Apache-2.0](LICENSE-APACHE) or
+[MIT](LICENSE-MIT), at the user's option. Unless you explicitly state
+otherwise, any contribution you intentionally submit for inclusion in the work,
+as defined in the Apache-2.0 license, shall be dual licensed as above, without
+any additional terms or conditions.
