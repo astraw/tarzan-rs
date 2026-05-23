@@ -228,6 +228,16 @@ fn resolve_stream(path: Option<PathBuf>) -> Option<PathBuf> {
 }
 
 fn main() -> Result<()> {
+    // Rust programs ignore SIGPIPE by default, so a write to a closed pipe
+    // returns EPIPE and `println!` panics. Restore the default handler so the
+    // OS kills the process cleanly instead (matches the behaviour users expect
+    // from `tarzan list | head`).
+    #[cfg(unix)]
+    // SAFETY: called once before any threads are spawned; SIG_DFL is valid.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "warn".into()),

@@ -355,6 +355,78 @@ fn list_verbose_and_json_are_mutually_exclusive() {
     );
 }
 
+/// Builds an archive whose plain listing exceeds the OS pipe buffer (~64 KiB).
+/// 5 000 entries × ~15 bytes each = ~75 KiB, which guarantees a write block
+/// before a `head -1` reader drains the pipe.
+fn big_archive(temp: &tempfile::TempDir) -> PathBuf {
+    use std::io::Cursor;
+
+    let archive = temp.path().join("big.tar.zst");
+    let out = fs::File::create(&archive).expect("create big archive");
+
+    let mut tar_data = Vec::new();
+    {
+        let mut builder = tar::Builder::new(&mut tar_data);
+        for i in 0..5000usize {
+            let name = format!("file_{i:04}.txt");
+            let content = b"x";
+            let mut header = tar::Header::new_gnu();
+            header.set_size(content.len() as u64);
+            header.set_mode(0o644);
+            header.set_uid(0);
+            header.set_gid(0);
+            header.set_mtime(0);
+            header.set_entry_type(tar::EntryType::Regular);
+            builder
+                .append_data(&mut header, &name, &content[..])
+                .expect("append entry");
+        }
+        builder.into_inner().expect("finish tar");
+    }
+
+    tarzan::wrap(Cursor::new(tar_data), out, tarzan::WrapOptions::default())
+        .expect("wrap big archive");
+
+    archive
+}
+
+/// Closing a pipe after reading one line must not cause a panic.
+/// Before the fix this test fails: `tarzan list` panics with "failed printing
+/// to stdout: Broken pipe" and exits 101.
+#[cfg(unix)]
+#[test]
+fn list_exits_cleanly_on_broken_pipe() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+
+    let temp = tempdir().expect("tempdir");
+    let archive = big_archive(&temp);
+
+    let mut child = Command::new(tarzan_bin())
+        .args(["list", "-f"])
+        .arg(&archive)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn tarzan list");
+
+    // Simulate `| head -1`: read one line then close the read end of the pipe.
+    {
+        let stdout = child.stdout.take().expect("stdout pipe");
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("read one line");
+    } // read end of pipe dropped here
+
+    // wait_with_output still collects stderr (stdout is already None).
+    let output = child.wait_with_output().expect("wait for child");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("panicked"),
+        "tarzan list panicked on broken pipe:\n{stderr}"
+    );
+}
+
 // Ensure wrapping still roundtrips correctly after adding TOC.
 #[test]
 fn wrap_still_roundtrips_after_toc_added() {
