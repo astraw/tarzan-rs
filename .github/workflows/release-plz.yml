@@ -51,5 +51,10 @@ jobs:
         with:
           command: release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # A Personal Access Token is required here instead of GITHUB_TOKEN.
+          # GitHub Actions will not trigger other workflow runs (e.g. cargo-dist)
+          # from events caused by the built-in GITHUB_TOKEN. The PAT must have
+          # `contents: write` and `pull-requests: write` scopes, and should be
+          # stored as a repository secret named RELEASE_PLZ_TOKEN.
+          GITHUB_TOKEN: ${{ secrets.RELEASE_PLZ_TOKEN }}
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

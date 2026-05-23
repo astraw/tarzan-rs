@@ -581,19 +581,39 @@ better reference if a sidecar mode is ever revisited.
 Releases are managed by [release-plz](https://release-plz.dev) and
 [cargo-dist](https://github.com/axodotdev/cargo-dist).
 
+### How it fits together
+
+- **release-plz** opens a "Release PR" on every push to `main`, bumps
+  `Cargo.toml`, regenerates `CHANGELOG.md`, publishes to crates.io, and pushes
+  a semver git tag.
+- **cargo-dist** watches for semver tag pushes and builds the platform binaries,
+  then creates the GitHub Release with them attached.
+
+The critical detail: GitHub Actions **will not** trigger a workflow run from
+events (including tag pushes) that are caused by the built-in `GITHUB_TOKEN`.
+release-plz must therefore use a Personal Access Token (PAT) to push the tag so
+that GitHub treats it as a real user event and wakes up cargo-dist.
+
+### Required secrets
+
+| Secret | Purpose |
+|---|---|
+| `RELEASE_PLZ_TOKEN` | PAT with `contents: write` and `pull-requests: write` — used by release-plz so its tag push triggers cargo-dist |
+| `CARGO_REGISTRY_TOKEN` | crates.io API token for publishing |
+
+### Normal release flow
+
 **Step 1 — merge conventional commits to `main`.**
 Every push to `main` triggers the `release-plz` workflow, which opens (or
-updates) a "Release PR" that bumps `Cargo.toml` version numbers and
-regenerates `CHANGELOG.md` from the Conventional Commit history.
+updates) a Release PR.
 
 **Step 2 — merge the Release PR.**
-Merging the Release PR causes `release-plz` to publish the new version to
-[crates.io](https://crates.io/crates/tarzan) and push a semver git tag (e.g.
-`v0.2.0`).
+release-plz publishes to [crates.io](https://crates.io/crates/tarzan) and
+pushes a semver git tag (e.g. `v0.2.0`) authenticated with `RELEASE_PLZ_TOKEN`.
 
 **Step 3 — binaries build automatically.**
-The semver tag triggers the `cargo-dist` release workflow, which cross-compiles
-and uploads pre-built archives for:
+The tag push triggers the cargo-dist Release workflow, which cross-compiles and
+uploads pre-built archives for:
 
 | Target | Archive |
 |---|---|
@@ -606,6 +626,20 @@ and uploads pre-built archives for:
 All archives include the binary, `README.md`, `LICENSE-MIT`, `LICENSE-APACHE`,
 and `THIRD-PARTY-LICENSES`. The completed release appears on the
 [releases page](https://github.com/astraw/tarzan-rs/releases).
+
+### Recovering a release that reached crates.io but has no GitHub Release
+
+This happens when release-plz pushed the tag using `GITHUB_TOKEN` (before the
+PAT was configured) — cargo-dist never saw the event. The tag already exists on
+the remote, so a plain push is rejected. Delete and re-push it to re-trigger:
+
+```sh
+git push origin :refs/tags/v0.1.1   # delete the remote tag
+git push origin v0.1.1              # re-push; triggers cargo-dist
+```
+
+Replace `v0.1.1` with the actual tag name (`git ls-remote --tags origin` lists
+what is there).
 
 ---
 
