@@ -18,7 +18,10 @@ fn create_archive(temp: &tempfile::TempDir) -> PathBuf {
     let tar_path = temp.path().join("input.tar");
     let archive = temp.path().join("archive.tar.zst");
 
-    let status = Command::new("tar")
+    let mut cmd = Command::new("tar");
+    #[cfg(target_os = "macos")]
+    cmd.env("COPYFILE_DISABLE", "1");
+    let status = cmd
         .arg("-cf")
         .arg(&tar_path)
         .arg("-C")

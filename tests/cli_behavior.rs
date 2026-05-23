@@ -22,7 +22,10 @@ fn fixture_root() -> PathBuf {
 
 /// `tar`s a directory's contents into `tar_path`.
 fn tar_directory(dir: &Path, tar_path: &Path) {
-    let status = Command::new("tar")
+    let mut cmd = Command::new("tar");
+    #[cfg(target_os = "macos")]
+    cmd.env("COPYFILE_DISABLE", "1");
+    let status = cmd
         .arg("-cf")
         .arg(tar_path)
         .arg("-C")

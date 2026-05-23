@@ -13,7 +13,10 @@ fn fixture_root() -> PathBuf {
 
 fn create_tar_from_fixture(output_tar: &Path) {
     let fixture = fixture_root();
-    let status = Command::new("tar")
+    let mut cmd = Command::new("tar");
+    #[cfg(target_os = "macos")]
+    cmd.env("COPYFILE_DISABLE", "1");
+    let status = cmd
         .arg("-cf")
         .arg(output_tar)
         .arg("-C")
@@ -153,7 +156,10 @@ fn extract_restores_file_mtime() {
     filetime::set_file_mtime(src.join("inner"), ft).unwrap();
 
     let tar_path = temp.path().join("input.tar");
-    let status = Command::new("tar")
+    let mut cmd = Command::new("tar");
+    #[cfg(target_os = "macos")]
+    cmd.env("COPYFILE_DISABLE", "1");
+    let status = cmd
         .arg("-cf")
         .arg(&tar_path)
         .arg("-C")
@@ -208,7 +214,10 @@ fn extract_restores_hard_links() {
     fs::hard_link(src.join("original.txt"), src.join("link.txt")).unwrap();
 
     let tar_path = temp.path().join("input.tar");
-    let status = Command::new("tar")
+    let mut cmd = Command::new("tar");
+    #[cfg(target_os = "macos")]
+    cmd.env("COPYFILE_DISABLE", "1");
+    let status = cmd
         .arg("-cf")
         .arg(&tar_path)
         .arg("-C")
@@ -268,9 +277,11 @@ fn extract_no_mtime_keeps_current_time() {
     filetime::set_file_mtime(src.join("file.txt"), ft).unwrap();
 
     let tar_path = temp.path().join("input.tar");
+    let mut cmd = Command::new("tar");
+    #[cfg(target_os = "macos")]
+    cmd.env("COPYFILE_DISABLE", "1");
     assert!(
-        Command::new("tar")
-            .arg("-cf")
+        cmd.arg("-cf")
             .arg(&tar_path)
             .arg("-C")
             .arg(&src)

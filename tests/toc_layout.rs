@@ -14,7 +14,10 @@ fn fixture_root() -> PathBuf {
 
 fn create_tar_from_fixture(output_tar: &Path) {
     let fixture = fixture_root();
-    let status = Command::new("tar")
+    let mut cmd = Command::new("tar");
+    #[cfg(target_os = "macos")]
+    cmd.env("COPYFILE_DISABLE", "1");
+    let status = cmd
         .arg("-cf")
         .arg(output_tar)
         .arg("-C")
