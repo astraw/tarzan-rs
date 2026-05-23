@@ -489,16 +489,42 @@ listing contents requires a full sequential decompression pass, and extracting a
 single file requires decompressing everything before it. The tar data itself is
 never altered.
 
-### `file(1)` recognition
+### Identifying tarzan archives
 
-A magic pattern for tarzan archives is distributed with this repository at
+**With `xxd` (universally available):**
+
+The identity frame occupies the first 14 bytes of every tarzan archive.
+`xxd -l 14` reveals it without any special tooling:
+
+```sh
+xxd -l 14 archive.tar.zst
+# 00000000: 542a 4d18 0600 0000 5452 5a4e 0101       T*M.....TRZN..
+#           └── 0x184D2A54 ──┘           └TRZN┘
+#           zstd skippable magic   tarzan identifier at offset 8
+```
+
+Bytes 8–11 are always the ASCII sequence `TRZN`; a quick sanity check:
+
+```sh
+xxd -s 8 -l 4 archive.tar.zst
+# 00000008: 5452 5a4e                                TRZN
+```
+
+**With `file(1)` and the bundled magic pattern:**
+
+A magic pattern is distributed at
 [contrib/tarzan.magic](contrib/tarzan.magic) and has been submitted to the upstream
 `file` database. To use it locally before it ships in your distro:
 
 ```sh
-file -m contrib/tarzan.magic archive.tar.zst
+MAGIC=contrib/tarzan.magic file archive.tar.zst
 # archive.tar.zst: tarzan archive v1
 ```
+
+> **Note:** use the `MAGIC=` environment variable rather than `file -m` — on
+> macOS, `-m` adds to the compiled system magic database, which then identifies
+> the embedded zstd data via an indirect lookup and wins on strength over the
+> tarzan pattern. `MAGIC=` replaces the system default entirely.
 
 ---
 
@@ -670,6 +696,39 @@ actually enable seeking, or extend it past the point of any compatibility with G
 tar. [ratarmount](https://github.com/mxmlnkn/ratarmount)'s SQLite index is the
 closest existing format that actually solves the random-access problem and is the
 better reference if a sidecar mode is ever revisited.
+
+---
+
+## Releasing
+
+Releases are managed by [release-plz](https://release-plz.dev) and
+[cargo-dist](https://github.com/axodotdev/cargo-dist).
+
+**Step 1 — merge conventional commits to `main`.**
+Every push to `main` triggers the `release-plz` workflow, which opens (or
+updates) a "Release PR" that bumps `Cargo.toml` version numbers and
+regenerates `CHANGELOG.md` from the Conventional Commit history.
+
+**Step 2 — merge the Release PR.**
+Merging the Release PR causes `release-plz` to publish the new version to
+[crates.io](https://crates.io/crates/tarzan) and push a semver git tag (e.g.
+`v0.2.0`).
+
+**Step 3 — binaries build automatically.**
+The semver tag triggers the `cargo-dist` release workflow, which cross-compiles
+and uploads pre-built archives for:
+
+| Target | Archive |
+|---|---|
+| Linux x86_64 | `tarzan-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux aarch64 | `tarzan-aarch64-unknown-linux-gnu.tar.gz` |
+| macOS x86_64 | `tarzan-x86_64-apple-darwin.tar.gz` |
+| macOS Apple Silicon | `tarzan-aarch64-apple-darwin.tar.gz` |
+| Windows x86_64 | `tarzan-x86_64-pc-windows-msvc.zip` |
+
+All archives include the binary, `README.md`, `LICENSE-MIT`, `LICENSE-APACHE`,
+and `THIRD-PARTY-LICENSES`. The completed release appears on the
+[releases page](https://github.com/astraw/tarzan-rs/releases).
 
 ---
 
