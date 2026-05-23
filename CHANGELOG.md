@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.2](https://github.com/astraw/tarzan-rs/compare/v0.1.1...v0.1.2) - 2026-05-23
+
+### Fixed
+
+- *(reader)* grow TOC scan window adaptively for large archives (claude-opus-4-7)
+
+### Other
+
+- clarify release process and PAT requirement in README (claude-sonnet-4-6)
+
 ## [0.1.1](https://github.com/astraw/tarzan-rs/compare/v0.1.0...v0.1.1) - 2026-05-23
 
 ### Fixed
