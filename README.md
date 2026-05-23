@@ -398,100 +398,13 @@ tarzan verify -v -f archive.tar.zst
 
 ---
 
-## File Format
+## File format and Rust API
 
-A tarzan archive is a valid zstd stream consisting of three sections:
-
-```text
-┌─────────────────────────────────────────────────────────┐
-│  Identity frame (skippable)                             │
-│  Magic: 0x184D2A54  Content: "TRZN" + version byte      │
-├─────────────────────────────────────────────────────────┤
-│  Compressed data frames                                  │
-│  Independent zstd frames sized around --chunk-size.     │
-│  Large members are split across several frames; small  │
-│  members are packed together to share a frame.          │
-├─────────────────────────────────────────────────────────┤
-│  TOC frame (skippable)                                  │
-│  Magic: 0x184D2A54  Content: zstd-compressed JSON TOC   │
-│  Located at the end; found by scanning from EOF.        │
-└─────────────────────────────────────────────────────────┘
-```
-
-The skippable frame magic number `0x184D2A54` is used for both the identity frame and
-the TOC frame; they are distinguished by position (first vs last) and by a type byte
-in the frame payload.
-
-The zstd spec defines any value in `0x184D2A50`–`0x184D2A5F` as a skippable frame and
-assigns no meaning to the low nibble. Producers may use any value in the range, and
-per the spec other tools may legally use the same magic number — so tarzan-aware
-readers identify tarzan frames via the `TRZN` ASCII identifier at the start of the
-payload, not by the magic number alone.
-
-The specific value `0x184D2A54` was chosen because (1) it avoids `0x184D2A5E`, which
-the [zstd seekable format extension][seekable] uses, and (2) zstd frames are
-little-endian on disk, so `0x184D2A54` is written as the byte sequence `54 2A 4D 18`
-— the first byte of every tarzan archive is ASCII `T`, which then continues into the
-`TRZN` payload identifier eight bytes later. A hex dump of any tarzan archive begins
-with a literal `T`.
-
-[seekable]: https://github.com/facebook/zstd/blob/dev/contrib/seekable_format/zstd_seekable_compression_format.md
-
-### TOC schema
-
-The TOC is a zstd-compressed JSON object. Abridged example:
-
-```json
-{
-  "tarzan_version": 1,
-  "members": [
-    {
-      "path": "src/main.rs",
-      "type": "file",
-      "size": 4301,
-      "mode": "0o644",
-      "uid": 1000,
-      "gid": 1000,
-      "mtime": 1730643742,
-      "chunks": [
-        {
-          "compressed_offset": 1024,
-          "compressed_size": 1891,
-          "uncompressed_size": 4301,
-          "sha256": "e3b0c44298fc1c149afb..."
-        }
-      ]
-    }
-  ]
-}
-```
-
-Each chunk also carries an optional `frame_offset` (omitted when zero):
-when small members are packed into a shared frame, it records where the
-member's bytes begin within that frame's decompressed data.
-
-Full schema documentation is in [docs/format.md](docs/format.md).
-
-### Compatibility
-
-A tarzan archive can be decompressed by any standard zstd implementation:
-
-```sh
-# Both of these work on any tarzan archive
-zstd -d archive.tar.zst | tar x
-tar --zstd -xf archive.tar.zst
-```
-
-The identity frame and TOC frame are silently skipped by standard zstd. The
-decompressed tar stream is bit-for-bit identical to what you would have gotten from
-plain `tar -cf`. What you lose by going through standard tools is tarzan's indexing:
-listing contents requires a full sequential decompression pass, and extracting a
-single file requires decompressing everything before it. The tar data itself is
-never altered.
+The file format specification (frame layout, magic numbers, TOC schema, zstd
+compatibility) and the Rust library API are documented in the
+[crate module documentation on docs.rs](https://docs.rs/tarzan).
 
 ### Identifying tarzan archives
-
-**With `xxd` (universally available):**
 
 The identity frame occupies the first 14 bytes of every tarzan archive.
 `xxd -l 14` reveals it without any special tooling:
@@ -503,28 +416,15 @@ xxd -l 14 archive.tar.zst
 #           zstd skippable magic   tarzan identifier at offset 8
 ```
 
-Bytes 8–11 are always the ASCII sequence `TRZN`; a quick sanity check:
-
-```sh
-xxd -s 8 -l 4 archive.tar.zst
-# 00000008: 5452 5a4e                                TRZN
-```
-
-**With `file(1)` and the bundled magic pattern:**
-
-A magic pattern is distributed at
-[contrib/tarzan.magic](contrib/tarzan.magic) and has been submitted to the upstream
-`file` database. To use it locally before it ships in your distro:
+A `file(1)` magic pattern is also distributed at
+[contrib/tarzan.magic](contrib/tarzan.magic). Use the `MAGIC=` environment
+variable rather than `-m` — on macOS, `-m` augments the compiled system magic
+database, which then wins on strength over the tarzan pattern:
 
 ```sh
 MAGIC=contrib/tarzan.magic file archive.tar.zst
 # archive.tar.zst: tarzan archive v1
 ```
-
-> **Note:** use the `MAGIC=` environment variable rather than `file -m` — on
-> macOS, `-m` adds to the compiled system magic database, which then identifies
-> the embedded zstd data via an indirect lookup and wins on strength over the
-> tarzan pattern. `MAGIC=` replaces the system default entirely.
 
 ---
 
@@ -579,39 +479,16 @@ redundancy is still captured within a frame; for most archives the difference is
 
 ## Library usage
 
-The `tarzan` crate exposes a library API for embedding tarzan support in other tools.
+The `tarzan` crate exposes a library API for embedding tarzan support in other
+tools. Add it to your `Cargo.toml`:
 
 ```toml
 [dependencies]
 tarzan = "0.1"
 ```
 
-```rust,no_run
-use tarzan::{TarzanReader, WrapOptions};
-use std::fs::File;
-use std::path::Path;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Wrap an existing tar stream
-    let input = File::open("archive.tar")?;
-    let output = File::create("archive.tar.zst")?;
-    let opts = WrapOptions::default().chunk_size(4 * 1024 * 1024);
-    tarzan::wrap(input, output, opts)?;
-
-    // Read the TOC without decompression
-    let mut reader = TarzanReader::open(Path::new("archive.tar.zst"))?;
-    for member in reader.members() {
-        println!("{} ({} bytes)", member.path, member.size);
-    }
-
-    // Extract a single file
-    let mut out = File::create("main.rs")?;
-    reader.extract_member("src/main.rs", &mut out)?;
-    Ok(())
-}
-```
-
-Full API documentation is on [docs.rs/tarzan](https://docs.rs/tarzan).
+Full API documentation — including format details and usage examples — is on
+[docs.rs/tarzan](https://docs.rs/tarzan).
 
 ---
 
