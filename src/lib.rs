@@ -165,5 +165,5 @@ mod wrap;
 
 pub use crate::extract::ExtractOptions;
 pub use crate::filter::PathFilter;
-pub use crate::reader::{TarzanReader, VerifyRecord, VerifyStatus};
+pub use crate::reader::{ReaderOptions, TarzanReader, VerifyRecord, VerifyStatus};
 pub use crate::wrap::{WrapOptions, wrap, wrap_with};

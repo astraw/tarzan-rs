@@ -45,13 +45,61 @@ pub enum VerifyStatus {
     NoChecksum,
 }
 
+/// Tunables for opening a tarzan archive.
+///
+/// The defaults are appropriate for typical archives. Override
+/// [`initial_scan_bytes`](Self::initial_scan_bytes) when opening very large
+/// archives — the TOC scales with member count, and starting with a larger
+/// initial read avoids a few doubling rounds on huge archives. Override
+/// [`max_scan_bytes`](Self::max_scan_bytes) to relax or tighten the safety
+/// ceiling on the scan window.
+#[derive(Debug, Clone, Copy)]
+pub struct ReaderOptions {
+    initial_scan_bytes: u64,
+    max_scan_bytes: u64,
+}
+
+impl Default for ReaderOptions {
+    fn default() -> Self {
+        Self {
+            initial_scan_bytes: INITIAL_SCAN_BYTES,
+            max_scan_bytes: MAX_SCAN_BYTES,
+        }
+    }
+}
+
+impl ReaderOptions {
+    /// Initial size of the read window used when scanning back from EOF
+    /// for the TOC frame. Must be at least 8 (one skippable-frame header).
+    /// Values below 8 are silently raised to 8.
+    pub fn initial_scan_bytes(mut self, bytes: u64) -> Self {
+        self.initial_scan_bytes = bytes.max(8);
+        self
+    }
+
+    /// Hard upper bound on the scan window. If the TOC frame is larger than
+    /// this, the open fails with "no tarzan TOC frame found". The default
+    /// is 1 GiB.
+    pub fn max_scan_bytes(mut self, bytes: u64) -> Self {
+        self.max_scan_bytes = bytes.max(8);
+        self
+    }
+}
+
 impl TarzanReader {
     /// Opens a tarzan archive file: validates the leading identity frame and
     /// loads the TOC by scanning back from the end of the file.
     pub fn open(path: &Path) -> Result<Self> {
+        Self::open_with_options(path, ReaderOptions::default())
+    }
+
+    /// Like [`open`](Self::open), but lets the caller tune the TOC scan
+    /// window — useful when opening very large archives whose TOC may
+    /// exceed the default initial read.
+    pub fn open_with_options(path: &Path, opts: ReaderOptions) -> Result<Self> {
         let file =
             File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
-        Self::from_seekable(file)
+        Self::from_seekable_with_options(file, opts)
             .with_context(|| format!("reading tarzan archive {}", path.display()))
     }
 
@@ -64,13 +112,22 @@ impl TarzanReader {
     /// the `verify` methods. Each member's chunk byte ranges
     /// (`compressed_offset` / `compressed_size`) are then available via
     /// [`members`](Self::members), so a caller can fetch them in parallel.
-    pub fn from_seekable<S: Read + Seek + 'static>(mut source: S) -> Result<Self> {
+    pub fn from_seekable<S: Read + Seek + 'static>(source: S) -> Result<Self> {
+        Self::from_seekable_with_options(source, ReaderOptions::default())
+    }
+
+    /// Like [`from_seekable`](Self::from_seekable), but accepts a
+    /// [`ReaderOptions`] for tuning the TOC scan window.
+    pub fn from_seekable_with_options<S: Read + Seek + 'static>(
+        mut source: S,
+        opts: ReaderOptions,
+    ) -> Result<Self> {
         let archive_size = source
             .seek(SeekFrom::End(0))
             .context("failed to seek to end of archive")?;
         let identity_version =
             read_identity_frame(&mut source).context("invalid identity frame")?;
-        let toc = find_toc(&mut source, archive_size).context("no tarzan TOC found")?;
+        let toc = find_toc(&mut source, archive_size, &opts).context("no tarzan TOC found")?;
         Ok(Self {
             source: Box::new(source),
             members: toc.members,
@@ -253,10 +310,17 @@ fn sha256_hex(data: &[u8]) -> String {
     hash.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// Maximum number of bytes read from the end of the file when scanning for the TOC.
+/// Initial window read from the end of the file when scanning for the TOC.
 ///
-/// Real TOCs are small (JSON + zstd), so 8 MB is a generous upper bound.
-const MAX_SCAN_BYTES: u64 = 8 * 1024 * 1024;
+/// Most TOCs fit easily in this; oversized ones trigger the adaptive grow
+/// below. Keeping the initial read modest avoids pulling tens of MB off
+/// remote/cold storage just to open a small archive.
+pub(crate) const INITIAL_SCAN_BYTES: u64 = 64 * 1024;
+
+/// Hard upper bound on the scan window. A TOC frame larger than this is
+/// treated as missing; the zstd skippable-frame length field is a `u32`,
+/// so 4 GiB is the absolute ceiling and 1 GiB is a comfortable safety net.
+pub(crate) const MAX_SCAN_BYTES: u64 = 1024 * 1024 * 1024;
 
 struct TocLocation {
     members: Vec<TocMember>,
@@ -264,44 +328,63 @@ struct TocLocation {
     frame_size: u64,
 }
 
-fn find_toc<R: Read + Seek>(file: &mut R, file_size: u64) -> Result<TocLocation> {
+/// Scans backward from EOF for the TOC skippable frame, growing the read
+/// window until the frame fits or the cap is reached.
+fn find_toc<R: Read + Seek>(
+    file: &mut R,
+    file_size: u64,
+    opts: &ReaderOptions,
+) -> Result<TocLocation> {
     if file_size < 8 {
         bail!("file too small to be a tarzan archive");
     }
-    let scan_size = MAX_SCAN_BYTES.min(file_size) as usize;
-    let scan_start = file_size - scan_size as u64;
-
-    file.seek(SeekFrom::Start(scan_start))
-        .context("failed to seek for TOC scan")?;
-    let mut buf = vec![0u8; scan_size];
-    file.read_exact(&mut buf)
-        .context("failed to read tail of archive")?;
 
     let magic = format::SKIPPABLE_FRAME_MAGIC.to_le_bytes();
+    let cap = opts.max_scan_bytes.min(file_size);
+    let mut scan_size = opts.initial_scan_bytes.min(cap).max(8);
 
-    // Walk backwards through the buffer looking for a skippable frame that ends at EOF.
-    for p in (0..=buf.len().saturating_sub(8)).rev() {
-        if buf[p..p + 4] != magic {
-            continue;
+    loop {
+        let scan_start = file_size - scan_size;
+        file.seek(SeekFrom::Start(scan_start))
+            .context("failed to seek for TOC scan")?;
+        let mut buf = vec![0u8; scan_size as usize];
+        file.read_exact(&mut buf)
+            .context("failed to read tail of archive")?;
+
+        let buf_len = buf.len() as u64;
+        // Walk backwards through the buffer looking for a skippable frame that ends at EOF.
+        for p in (0..=buf.len().saturating_sub(8)).rev() {
+            if buf[p..p + 4] != magic {
+                continue;
+            }
+            // Compare in u64 — payload_size is a u32 (up to ~4 GiB), so on
+            // 32-bit targets the obvious `p + 8 + payload_size` could wrap.
+            let payload_size = u32::from_le_bytes(buf[p + 4..p + 8].try_into().unwrap());
+            if (p as u64) + 8 + (payload_size as u64) != buf_len {
+                continue; // frame doesn't end exactly at EOF
+            }
+            let payload = &buf[p + 8..];
+            if payload.len() < 6 || &payload[0..4] != b"TRZN" {
+                continue;
+            }
+            if payload[4] != format::FRAME_TYPE_TOC {
+                continue;
+            }
+            let toc = crate::format::toc::decode_toc_payload(payload)
+                .context("failed to decode TOC frame")?;
+            return Ok(TocLocation {
+                members: toc.members,
+                offset: scan_start + p as u64,
+                frame_size: 8 + payload_size as u64,
+            });
         }
-        let payload_size = u32::from_le_bytes(buf[p + 4..p + 8].try_into().unwrap()) as usize;
-        if p + 8 + payload_size != buf.len() {
-            continue; // frame doesn't end exactly at EOF
+
+        // Not found in this window. The TOC frame may be larger than our
+        // current read; grow and retry until we hit the cap.
+        if scan_size >= cap {
+            break;
         }
-        let payload = &buf[p + 8..];
-        if payload.len() < 6 || &payload[0..4] != b"TRZN" {
-            continue;
-        }
-        if payload[4] != format::FRAME_TYPE_TOC {
-            continue;
-        }
-        let toc = crate::format::toc::decode_toc_payload(payload)
-            .context("failed to decode TOC frame")?;
-        return Ok(TocLocation {
-            members: toc.members,
-            offset: scan_start + p as u64,
-            frame_size: 8 + payload_size as u64,
-        });
+        scan_size = scan_size.saturating_mul(2).min(cap);
     }
 
     bail!("no tarzan TOC frame found")
@@ -326,4 +409,128 @@ fn read_identity_frame<R: Read + Seek>(file: &mut R) -> Result<u8> {
     file.read_exact(&mut payload)
         .context("failed to read identity frame payload")?;
     format::identity::decode(&payload)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::format::identity::identity_frame_v1;
+    use crate::format::toc::{ChunkInfo, EntryType, TocFrame, TocMember, encode_toc_frame};
+    use std::io::Cursor;
+
+    /// Builds a synthetic tarzan archive in memory whose TOC frame, after
+    /// zstd-compression, is at least `min_compressed_toc_bytes`.
+    ///
+    /// Each member is given a long pseudorandom path built from many concatenated
+    /// SHA-256 hashes, which carries enough entropy that zstd compresses it at
+    /// roughly 50%. The member count is therefore chosen so the projected
+    /// compressed size comfortably exceeds the target, and the TOC is encoded
+    /// exactly once (the previous batch-and-retry loop was O(n²)).
+    fn synth_archive_with_large_toc(min_compressed_toc_bytes: usize) -> (Vec<u8>, usize) {
+        // Path length per member, in characters. 8 × 64 chars = 512-byte path
+        // contributes ~256 bytes compressed. The per-member lower bound is
+        // deliberately conservative so the projected total comfortably exceeds
+        // the target — empirically the actual rate is ~315 bytes/member.
+        const HASHES_PER_PATH: u64 = 8;
+        const PER_MEMBER_COMPRESSED_LOWER_BOUND: usize = 280;
+
+        let target_members = (min_compressed_toc_bytes / PER_MEMBER_COMPRESSED_LOWER_BOUND).max(8);
+
+        let mut members: Vec<TocMember> = Vec::with_capacity(target_members);
+        for i in 0..target_members as u64 {
+            let mut path = String::with_capacity((HASHES_PER_PATH * 64) as usize);
+            for j in 0..HASHES_PER_PATH {
+                path.push_str(&sha256_hex(&[i.to_le_bytes(), j.to_le_bytes()].concat()));
+            }
+            let sha = sha256_hex(&[b"chunk", i.to_le_bytes().as_slice()].concat());
+            members.push(TocMember {
+                path,
+                entry_type: EntryType::File,
+                size: 100,
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+                mtime: 0,
+                tar_offset: i * 1024,
+                link_target: None,
+                chunks: vec![ChunkInfo {
+                    compressed_offset: i * 1024,
+                    compressed_size: 100,
+                    uncompressed_size: 100,
+                    frame_offset: 0,
+                    sha256: Some(sha),
+                }],
+            });
+        }
+
+        let toc = TocFrame {
+            tarzan_version: 1,
+            members,
+        };
+        let toc_bytes = encode_toc_frame(&toc, 3).expect("encode toc");
+        assert!(
+            toc_bytes.len() >= min_compressed_toc_bytes,
+            "synthetic TOC ({} bytes) is smaller than target ({}); bump HASHES_PER_PATH \
+             or PER_MEMBER_COMPRESSED_ESTIMATE",
+            toc_bytes.len(),
+            min_compressed_toc_bytes
+        );
+
+        let identity = identity_frame_v1();
+        // 0xFF filler can't accidentally match the skippable-frame magic (0x184D2A54).
+        let filler = vec![0xFFu8; 1024];
+        let mut archive = Vec::with_capacity(identity.len() + filler.len() + toc_bytes.len());
+        archive.extend_from_slice(&identity);
+        archive.extend_from_slice(&filler);
+        archive.extend_from_slice(&toc_bytes);
+        (archive, toc.members.len())
+    }
+
+    #[test]
+    fn reader_finds_toc_frame_larger_than_default_initial_window() {
+        // Forces at least one window-doubling round with default options.
+        let target = (INITIAL_SCAN_BYTES as usize) * 4;
+        let (archive, member_count) = synth_archive_with_large_toc(target);
+
+        let reader = TarzanReader::from_seekable(Cursor::new(archive)).expect("open archive");
+        assert_eq!(reader.members().len(), member_count);
+    }
+
+    #[test]
+    fn reader_finds_toc_frame_larger_than_eight_megabytes() {
+        // Regression for the original report: a TOC larger than the old hard
+        // 8 MB scan cap. Confirms the adaptive grow reaches multi-MB frames.
+        let (archive, member_count) = synth_archive_with_large_toc(8 * 1024 * 1024 + 1);
+
+        let reader = TarzanReader::from_seekable(Cursor::new(archive)).expect("open archive");
+        assert_eq!(reader.members().len(), member_count);
+    }
+
+    #[test]
+    fn reader_options_initial_scan_bytes_skips_growth_for_huge_toc() {
+        // Pre-sized initial window finds the TOC on the first read.
+        let (archive, member_count) = synth_archive_with_large_toc(2 * 1024 * 1024);
+        let opts = ReaderOptions::default().initial_scan_bytes(16 * 1024 * 1024);
+        let reader = TarzanReader::from_seekable_with_options(Cursor::new(archive), opts)
+            .expect("open archive");
+        assert_eq!(reader.members().len(), member_count);
+    }
+
+    #[test]
+    fn reader_options_max_scan_bytes_clamps_search() {
+        // A 256 KB cap can't reach a multi-MB TOC, so open should fail
+        // cleanly with the expected error.
+        let (archive, _) = synth_archive_with_large_toc(2 * 1024 * 1024);
+        let opts = ReaderOptions::default().max_scan_bytes(256 * 1024);
+        let result = TarzanReader::from_seekable_with_options(Cursor::new(archive), opts);
+        let err = match result {
+            Ok(_) => panic!("open should fail when TOC exceeds max_scan_bytes"),
+            Err(e) => e,
+        };
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("no tarzan TOC frame found"),
+            "unexpected error: {msg}"
+        );
+    }
 }
