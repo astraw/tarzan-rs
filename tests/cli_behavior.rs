@@ -217,9 +217,12 @@ fn file_magic_identifies_tarzan_archive() {
     let archive = wrap_fixture(&temp);
     let magic = Path::new(env!("CARGO_MANIFEST_DIR")).join("contrib/tarzan.magic");
 
+    // Use the MAGIC env var rather than `-m` so our pattern takes sole
+    // precedence. On macOS, `-m` adds to the compiled system magic which
+    // detects the embedded zstd via `indirect` and wins on strength; the
+    // MAGIC env var replaces the default entirely.
     let output = Command::new("file")
-        .arg("-m")
-        .arg(&magic)
+        .env("MAGIC", &magic)
         .arg(&archive)
         .output()
         .expect("failed to run file");
