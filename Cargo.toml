@@ -1,6 +1,6 @@
 [package]
 name = "tarzan"
-version = "0.1.2"
+version = "0.2.0"
 description = "Random-access, seekable .tar.zst archives with an embedded table-of-contents index"
 edition = "2024"
 rust-version = "1.87"
@@ -19,6 +19,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 tar = "0.4"
+twox-hash = { version = "2", default-features = false, features = ["xxhash64"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
 zstd = "0.13"

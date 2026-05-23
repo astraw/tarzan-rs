@@ -39,71 +39,55 @@ fn wrap_fixture() -> (tempfile::TempDir, Vec<u8>) {
 }
 
 #[test]
-fn wrapped_archive_ends_with_toc_skippable_frame() {
+fn wrapped_archive_ends_with_footer_then_toc_before() {
     let (_temp, wrapped) = wrap_fixture();
 
-    let magic = tarzan::format::SKIPPABLE_FRAME_MAGIC.to_le_bytes();
+    let footer_size = tarzan::format::footer::FOOTER_FRAME_SIZE as usize;
     assert!(
-        wrapped.len() >= 8,
-        "archive too short: {} bytes",
+        wrapped.len() >= footer_size,
+        "archive too short for a footer: {} bytes",
         wrapped.len()
     );
-    // The last 4+4+N bytes must be a valid skippable frame.
-    // Walk backwards from the end to find it.
-    let end = wrapped.len();
-    let mut found = false;
-    for p in (0..=end.saturating_sub(8)).rev() {
-        if wrapped[p..p + 4] != magic {
-            continue;
-        }
-        let payload_size = u32::from_le_bytes(wrapped[p + 4..p + 8].try_into().unwrap()) as usize;
-        if p + 8 + payload_size != end {
-            continue;
-        }
-        let payload = &wrapped[p + 8..];
-        if payload.len() >= 5 && &payload[0..4] == b"TRZN" {
-            assert_eq!(
-                payload[4],
-                tarzan::format::FRAME_TYPE_TOC,
-                "last skippable frame should be a TOC frame"
-            );
-            found = true;
-            break;
-        }
-    }
-    assert!(found, "did not find a tarzan TOC frame at end of archive");
+
+    let footer_start = wrapped.len() - footer_size;
+    let footer_magic =
+        u32::from_le_bytes(wrapped[footer_start..footer_start + 4].try_into().unwrap());
+    assert_eq!(footer_magic, tarzan::format::SKIPPABLE_FRAME_MAGIC);
+    assert_eq!(&wrapped[footer_start + 8..footer_start + 12], b"TRZN");
+    assert_eq!(
+        wrapped[footer_start + 12],
+        tarzan::format::FRAME_TYPE_FOOTER,
+        "last skippable frame should be the footer frame"
+    );
+
+    let footer = tarzan::format::footer::decode_footer_payload(&wrapped[footer_start + 8..])
+        .expect("footer decode should succeed");
+    let toc_start = footer.toc_offset as usize;
+    let toc_end = toc_start + footer.toc_frame_size as usize;
+    assert_eq!(toc_end, footer_start, "TOC must butt up against the footer");
+    assert_eq!(&wrapped[toc_start + 8..toc_start + 12], b"TRZN");
+    assert_eq!(
+        wrapped[toc_start + 12],
+        tarzan::format::FRAME_TYPE_TOC,
+        "frame the footer points to must be a TOC frame"
+    );
 }
 
 #[test]
 fn toc_contains_expected_entries() {
     let (_temp, wrapped) = wrap_fixture();
 
-    // Find and decode the TOC frame.
-    let magic = tarzan::format::SKIPPABLE_FRAME_MAGIC.to_le_bytes();
-    let end = wrapped.len();
-    let mut toc_frame: Option<tarzan::format::toc::TocFrame> = None;
-    for p in (0..=end.saturating_sub(8)).rev() {
-        if wrapped[p..p + 4] != magic {
-            continue;
-        }
-        let payload_size = u32::from_le_bytes(wrapped[p + 4..p + 8].try_into().unwrap()) as usize;
-        if p + 8 + payload_size != end {
-            continue;
-        }
-        let payload = &wrapped[p + 8..];
-        if payload.len() >= 5
-            && &payload[0..4] == b"TRZN"
-            && payload[4] == tarzan::format::FRAME_TYPE_TOC
-        {
-            toc_frame = Some(
-                tarzan::format::toc::decode_toc_payload(payload)
-                    .expect("TOC decode should succeed"),
-            );
-            break;
-        }
-    }
-    let toc = toc_frame.expect("TOC frame must be present");
-    assert_eq!(toc.tarzan_version, 1);
+    let footer_size = tarzan::format::footer::FOOTER_FRAME_SIZE as usize;
+    let footer_start = wrapped.len() - footer_size;
+    let footer = tarzan::format::footer::decode_footer_payload(&wrapped[footer_start + 8..])
+        .expect("footer decode should succeed");
+
+    let toc_start = footer.toc_offset as usize;
+    let toc_end = toc_start + footer.toc_frame_size as usize;
+    let toc = tarzan::format::toc::decode_toc_payload(&wrapped[toc_start + 8..toc_end])
+        .expect("TOC decode should succeed");
+
+    assert_eq!(toc.tarzan_version, 2);
     assert!(
         !toc.members.is_empty(),
         "TOC should have at least one member"

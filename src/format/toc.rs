@@ -24,6 +24,13 @@ pub struct TocMember {
     pub tar_offset: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_target: Option<String>,
+    /// SHA-256 of the member's file content (no headers, no padding), as
+    /// 64-character lowercase hex. Populated for regular files; `None` for
+    /// directories, symlinks, hard links, and device nodes. Format and value
+    /// match `sha256sum`'s output, so users can verify against on-disk files
+    /// without invoking tarzan.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_sha256: Option<String>,
     pub chunks: Vec<ChunkInfo>,
 }
 
@@ -50,8 +57,6 @@ pub struct ChunkInfo {
     /// the grouping notes in the format documentation.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub frame_offset: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sha256: Option<String>,
 }
 
 fn is_zero(n: &u64) -> bool {
@@ -73,10 +78,19 @@ pub fn encode_toc_frame(toc: &TocFrame, level: i32) -> Result<Vec<u8>> {
     Ok(encode_skippable_frame(&payload))
 }
 
+/// Hard cap on the decompressed size of the TOC's JSON payload. A producer
+/// can legally write a zstd skippable frame up to ~4 GiB, which could
+/// decompress to many times that — refusing here defends against accidental
+/// zip-bomb-shaped TOCs and against malicious input. 1 GiB of JSON
+/// corresponds to roughly 4 million members at typical entry sizes; if you
+/// genuinely have a larger archive, raise the cap deliberately.
+pub const MAX_TOC_DECOMPRESSED_BYTES: u64 = 1024 * 1024 * 1024;
+
 /// Decodes a TOC-frame payload (everything after the 8-byte skippable-frame header).
 ///
 /// Expects: `TRZN` + `FRAME_TYPE_TOC` + version byte + zstd-compressed JSON.
 pub fn decode_toc_payload(payload: &[u8]) -> Result<TocFrame> {
+    use std::io::Read;
     if payload.len() < 6 {
         bail!(
             "TOC payload too short: {} bytes (expected ≥6)",
@@ -93,7 +107,18 @@ pub fn decode_toc_payload(payload: &[u8]) -> Result<TocFrame> {
     if version != TOC_VERSION_V1 {
         bail!("unsupported TOC version: {version}");
     }
-    let json = zstd::stream::decode_all(std::io::Cursor::new(&payload[6..]))
+    // Take 1 extra byte past the limit so we can distinguish "exactly at
+    // limit" from "over limit" with a single read.
+    let mut decoder = zstd::stream::read::Decoder::new(std::io::Cursor::new(&payload[6..]))
+        .context("failed to create zstd decoder for TOC")?;
+    let mut json = Vec::new();
+    decoder
+        .by_ref()
+        .take(MAX_TOC_DECOMPRESSED_BYTES + 1)
+        .read_to_end(&mut json)
         .context("failed to decompress TOC JSON")?;
+    if json.len() as u64 > MAX_TOC_DECOMPRESSED_BYTES {
+        bail!("decompressed TOC exceeds the {MAX_TOC_DECOMPRESSED_BYTES}-byte safety cap");
+    }
     serde_json::from_slice(&json).context("failed to deserialize TOC JSON")
 }

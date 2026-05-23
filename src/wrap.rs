@@ -6,10 +6,11 @@ use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
 use crate::format::{
+    footer::{Footer, encode_footer_frame},
     identity,
     toc::{ChunkInfo, EntryType, TocFrame, TocMember},
 };
-use crate::io::CountingWriter;
+use crate::io::{CountingWriter, HashingWriter};
 
 #[derive(Debug, Clone)]
 pub struct WrapOptions {
@@ -113,12 +114,7 @@ pub fn wrap<R: Read, W: Write>(input: R, output: W, opts: WrapOptions) -> Result
 /// Members smaller than `opts.chunk_size` are grouped together into a shared
 /// zstd frame, so a member is reported once the group it belongs to has been
 /// flushed.
-pub fn wrap_with<R, W, F>(
-    input: R,
-    mut output: W,
-    opts: WrapOptions,
-    mut on_member: F,
-) -> Result<()>
+pub fn wrap_with<R, W, F>(input: R, output: W, opts: WrapOptions, mut on_member: F) -> Result<()>
 where
     R: Read,
     W: Write,
@@ -139,7 +135,11 @@ where
         window: Rc::clone(&window),
     });
 
-    let id_frame = identity::identity_frame_v1();
+    // Everything from the identity frame through the TOC frame is hashed; the
+    // footer (which carries the hash) is written outside the hashed region.
+    let mut output = HashingWriter::new(output);
+
+    let id_frame = identity::identity_frame();
     output
         .write_all(&id_frame)
         .context("failed to write identity frame")?;
@@ -227,6 +227,11 @@ where
                 // Pull the data through the window ourselves, emitting a frame
                 // whenever a full chunk_size has accumulated. Letting the tar
                 // reader skip the data instead would buffer the whole member.
+                // For regular files we also fold each scratch read into a
+                // streaming SHA-256 of the member's content; chunks get drained
+                // from the window before we could go back and hash from there.
+                let mut content_hasher =
+                    matches!(members[idx].entry_type, EntryType::File).then(Sha256::new);
                 let mut data_left = members[idx].size;
                 while data_left > 0 {
                     let want = data_left.min(scratch.len() as u64) as usize;
@@ -238,6 +243,9 @@ where
                             "unexpected end of input while reading {}",
                             members[idx].path
                         );
+                    }
+                    if let Some(h) = &mut content_hasher {
+                        h.update(&scratch[..n]);
                     }
                     data_left -= n as u64;
                     while window.borrow().end() - next_chunk_start >= chunk_size {
@@ -254,6 +262,9 @@ where
                         window.borrow_mut().drain_to(end);
                         next_chunk_start = end;
                     }
+                }
+                if let Some(h) = content_hasher {
+                    members[idx].content_sha256 = Some(finalize_sha256_hex(h));
                 }
 
                 pending = Some(Pending::Large { idx, entry_end });
@@ -334,14 +345,28 @@ where
     }
 
     let toc = TocFrame {
-        tarzan_version: 1,
+        tarzan_version: 2,
         members,
     };
     let toc_frame =
         crate::format::toc::encode_toc_frame(&toc, opts.level).context("failed to encode TOC")?;
+    let toc_offset = pos;
+    let toc_frame_size = toc_frame.len() as u64;
     output
         .write_all(&toc_frame)
         .context("failed to write TOC frame")?;
+
+    // The footer sits outside the hashed region and carries the hash of
+    // everything before it (identity + data frames + TOC).
+    let (mut inner, archive_xxhash64) = output.finish();
+    let footer = encode_footer_frame(&Footer {
+        toc_offset,
+        toc_frame_size,
+        archive_xxhash64,
+    });
+    inner
+        .write_all(&footer)
+        .context("failed to write footer frame")?;
 
     Ok(())
 }
@@ -367,6 +392,17 @@ where
     W: Write,
     F: FnMut(&TocMember),
 {
+    // Hash the member's content from the window before any flush could drain
+    // it. For small members the tar reader captured the content bytes when it
+    // skipped past them to reach the next entry; those bytes live in the
+    // window until the group they belong to is flushed.
+    if matches!(members[idx].entry_type, EntryType::File) {
+        let content_start = members[idx].tar_offset + 512;
+        let content_end = content_start + members[idx].size;
+        let w = window.borrow();
+        members[idx].content_sha256 = Some(sha256_hex(w.slice(content_start, content_end)));
+    }
+
     if !group.is_empty() && *group_size + region_size > chunk_size {
         flush_group(
             output,
@@ -422,7 +458,7 @@ where
     let start = *next_chunk_start;
     let end = start + *group_size;
 
-    if let Some((compressed_offset, compressed_size, sha256)) =
+    if let Some((compressed_offset, compressed_size)) =
         compress_frame(output, pos, window, start, end, level)?
     {
         let mut frame_offset = 0u64;
@@ -432,7 +468,6 @@ where
                 compressed_size,
                 uncompressed_size: *region_size,
                 frame_offset,
-                sha256: Some(sha256.clone()),
             });
             frame_offset += region_size;
         }
@@ -459,7 +494,7 @@ fn push_frame<W: Write>(
     level: i32,
     chunks: &mut Vec<ChunkInfo>,
 ) -> Result<()> {
-    if let Some((compressed_offset, compressed_size, sha256)) =
+    if let Some((compressed_offset, compressed_size)) =
         compress_frame(output, pos, window, start, end, level)?
     {
         chunks.push(ChunkInfo {
@@ -467,7 +502,6 @@ fn push_frame<W: Write>(
             compressed_size,
             uncompressed_size: end - start,
             frame_offset: 0,
-            sha256: Some(sha256),
         });
     }
     Ok(())
@@ -476,8 +510,13 @@ fn push_frame<W: Write>(
 /// Compresses the window's `[start, end)` bytes as an independent zstd frame,
 /// appends it to `output`, and advances `pos`.
 ///
-/// Returns the frame's compressed offset, compressed size, and the SHA-256 of
-/// its decompressed contents — or `None` if the range is empty.
+/// The encoder is configured to embed a 4-byte XXHash64 content checksum in
+/// every frame; the standard zstd decoder verifies it automatically on the
+/// way out, so a corrupted chunk fails at decompress time without any
+/// further work on our side.
+///
+/// Returns the frame's compressed offset and size — or `None` if the range
+/// is empty.
 fn compress_frame<W: Write>(
     output: &mut W,
     pos: &mut u64,
@@ -485,7 +524,7 @@ fn compress_frame<W: Write>(
     start: u64,
     end: u64,
     level: i32,
-) -> Result<Option<(u64, u64, String)>> {
+) -> Result<Option<(u64, u64)>> {
     let window = window.borrow();
     let bytes = window.slice(start, end);
     if bytes.is_empty() {
@@ -498,6 +537,9 @@ fn compress_frame<W: Write>(
         let mut encoder = zstd::stream::write::Encoder::new(&mut counting, level)
             .context("failed to create zstd encoder")?;
         encoder
+            .include_checksum(true)
+            .context("failed to enable zstd content checksum")?;
+        encoder
             .write_all(bytes)
             .context("failed to compress chunk")?;
         encoder.finish().context("failed to finish zstd frame")?;
@@ -505,11 +547,7 @@ fn compress_frame<W: Write>(
     };
     *pos += compressed_size;
 
-    Ok(Some((
-        compressed_offset,
-        compressed_size,
-        sha256_hex(bytes),
-    )))
+    Ok(Some((compressed_offset, compressed_size)))
 }
 
 /// Reads an entry's metadata into a partial `TocMember` (with no `chunks`).
@@ -542,6 +580,9 @@ fn read_member_metadata<R: Read>(entry: &tar::Entry<'_, R>) -> Result<TocMember>
         mtime,
         tar_offset,
         link_target,
+        // Filled in later: from the window during small-member grouping,
+        // from a streaming hasher in the large-member read loop.
+        content_sha256: None,
         chunks: Vec::new(),
     })
 }
@@ -549,6 +590,14 @@ fn read_member_metadata<R: Read>(entry: &tar::Entry<'_, R>) -> Result<TocMember>
 fn sha256_hex(data: &[u8]) -> String {
     let hash = Sha256::digest(data);
     hash.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn finalize_sha256_hex(hasher: Sha256) -> String {
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 fn to_entry_type(t: tar::EntryType) -> EntryType {

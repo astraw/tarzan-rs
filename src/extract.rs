@@ -27,6 +27,11 @@ pub struct ExtractOptions {
     /// entries keep whatever timestamp the filesystem assigns at
     /// creation. Defaults to true.
     pub restore_mtime: bool,
+    /// If a regular-file member fails to extract because of a corrupted
+    /// data chunk (zstd decode error, unexpected EOF mid-frame, …), log
+    /// a warning and continue with the remaining members rather than
+    /// aborting the whole extraction. Defaults to false.
+    pub skip_bad_chunks: bool,
 }
 
 impl Default for ExtractOptions {
@@ -36,6 +41,7 @@ impl Default for ExtractOptions {
             excludes: Vec::new(),
             includes: Vec::new(),
             restore_mtime: true,
+            skip_bad_chunks: false,
         }
     }
 }
@@ -162,12 +168,28 @@ impl TarzanReader {
                 let file = File::create(target)
                     .with_context(|| format!("creating file {}", target.display()))?;
                 let mut writer = BufWriter::new(file);
-                self.extract_member(&member.path, &mut writer)?;
-                writer.flush()?;
-                set_unix_mode(target, member.mode)?;
-                if opts.restore_mtime {
-                    filetime::set_file_mtime(target, mtime)
-                        .with_context(|| format!("setting mtime on {}", target.display()))?;
+                match self.extract_member(&member.path, &mut writer) {
+                    Ok(()) => {
+                        writer.flush()?;
+                        set_unix_mode(target, member.mode)?;
+                        if opts.restore_mtime {
+                            filetime::set_file_mtime(target, mtime).with_context(|| {
+                                format!("setting mtime on {}", target.display())
+                            })?;
+                        }
+                    }
+                    Err(err) if opts.skip_bad_chunks => {
+                        // Drop the writer first so the partial file is closed
+                        // before we remove it.
+                        drop(writer);
+                        let _ = fs::remove_file(target);
+                        warn!(
+                            path = %member.path,
+                            error = format!("{err:#}"),
+                            "skipping member with unreadable data (--skip-bad-chunks)"
+                        );
+                    }
+                    Err(err) => return Err(err),
                 }
             }
             EntryType::Symlink => {

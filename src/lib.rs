@@ -13,30 +13,37 @@
 //!
 //! # File format
 //!
-//! A tarzan archive is a valid zstd stream with three sections:
+//! A tarzan archive is a valid zstd stream with four sections:
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────────────┐
-//! │  Identity frame (skippable)                             │
-//! │  Magic: 0x184D2A54  Content: "TRZN" + version byte      │
+//! │  Identity frame (skippable, 14 bytes)                   │
+//! │  Magic: 0x184D2A54  Content: "TRZN" + type + version    │
 //! ├─────────────────────────────────────────────────────────┤
-//! │  Compressed data frames                                  │
-//! │  Independent zstd frames sized around --chunk-size.     │
+//! │  Compressed data frames                                 │
+//! │  Independent zstd frames sized around --chunk-size,     │
+//! │  each carrying a 4-byte XXHash64 content checksum that  │
+//! │  the standard zstd decoder verifies on decompression.   │
 //! │  Large members split across several frames; small       │
 //! │  members packed together to share a frame.              │
 //! ├─────────────────────────────────────────────────────────┤
 //! │  TOC frame (skippable)                                  │
 //! │  Magic: 0x184D2A54  Content: zstd-compressed JSON TOC   │
-//! │  Located at the end; found by scanning from EOF.        │
+//! ├─────────────────────────────────────────────────────────┤
+//! │  Footer frame (skippable, 38 bytes)                     │
+//! │  Magic: 0x184D2A54  Content: "TRZN" + type + version    │
+//! │  + TOC offset (u64) + TOC size (u64) + XXHash64 (8 B)   │
+//! │  Hash covers bytes 0..(file_size - 38), seeded with     │
+//! │  the constant `ARCHIVE_HASH_SEED`.                      │
 //! └─────────────────────────────────────────────────────────┘
 //! ```
 //!
-//! The skippable frame magic `0x184D2A54` is used for both the identity frame
-//! and the TOC frame; they are distinguished by position (first vs. last) and
-//! by a type byte in the frame payload.  The zstd spec defines any value in
-//! `0x184D2A50`–`0x184D2A5F` as a skippable frame; tarzan-aware readers
-//! identify tarzan frames via the `TRZN` ASCII identifier at offset 8, not
-//! by the magic number alone.
+//! The skippable frame magic `0x184D2A54` is shared by all four sections;
+//! they are distinguished by a frame-type byte in the payload
+//! (`0x01` identity, `0x02` TOC, `0x03` footer). The zstd spec defines any
+//! value in `0x184D2A50`–`0x184D2A5F` as a skippable frame; tarzan-aware
+//! readers identify tarzan frames via the `TRZN` ASCII identifier at offset 8,
+//! not by the magic number alone.
 //!
 //! zstd frames are little-endian on disk, so `0x184D2A54` is written as the
 //! byte sequence `54 2A 4D 18` — the first byte of every tarzan archive is
@@ -44,9 +51,30 @@
 //!
 //! ```text
 //! $ xxd -l 14 archive.tar.zst
-//! 00000000: 542a 4d18 0600 0000 5452 5a4e 0101       T*M.....TRZN..
+//! 00000000: 542a 4d18 0600 0000 5452 5a4e 0102       T*M.....TRZN..
 //!           └── 0x184D2A54 ──┘           └TRZN┘
 //! ```
+//!
+//! The version byte at offset 13 is `0x02` for the current format.
+//!
+//! Opening an archive reads two regions: the 14-byte identity frame at the
+//! start and the 38-byte footer at the end. The footer carries the TOC's
+//! byte offset and size, so the TOC is then fetched with a single seek — no
+//! scanning, regardless of TOC size.
+//!
+//! ## Integrity layers
+//!
+//! - **Per data frame** — zstd's built-in XXHash64 content checksum is
+//!   enabled on every chunk, so a corrupted compressed byte fails at
+//!   decompress time with no extra work on the reader's side.
+//! - **Per member** — each regular-file entry's TOC record carries the
+//!   SHA-256 of the file's content (no headers, no padding). Format and
+//!   value match `sha256sum`'s output, so users can compare against
+//!   on-disk files without invoking tarzan.
+//! - **Whole archive** — the footer carries an XXHash64 over the entire
+//!   archive prefix. `tarzan verify --quick` re-hashes the file in one
+//!   sequential pass and compares; cheap end-to-end bit-rot detection
+//!   that requires no decompression.
 //!
 //! ## TOC schema
 //!
@@ -54,22 +82,23 @@
 //!
 //! ```json
 //! {
-//!   "tarzan_version": 1,
+//!   "tarzan_version": 2,
 //!   "members": [
 //!     {
 //!       "path": "src/main.rs",
 //!       "type": "file",
 //!       "size": 4301,
-//!       "mode": "0o644",
+//!       "mode": 420,
 //!       "uid": 1000,
 //!       "gid": 1000,
 //!       "mtime": 1730643742,
+//!       "tar_offset": 1024,
+//!       "content_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
 //!       "chunks": [
 //!         {
 //!           "compressed_offset": 1024,
 //!           "compressed_size": 1891,
-//!           "uncompressed_size": 4301,
-//!           "sha256": "e3b0c44298fc1c149afb..."
+//!           "uncompressed_size": 4301
 //!         }
 //!       ]
 //!     }
@@ -81,13 +110,13 @@
 //! larger than the chunk size spans several chunks; small members are packed
 //! together to share a frame, and the optional `frame_offset` field (omitted
 //! when zero) gives the member's byte offset within that frame's decompressed
-//! data.  Full schema documentation is in
-//! [docs/format.md](https://github.com/astraw/tarzan-rs/blob/main/docs/format.md).
+//! data.
 //!
 //! ## zstd compatibility
 //!
 //! Every tarzan archive is a valid zstd stream.  Standard decoders skip the
-//! identity and TOC skippable frames and decompress the data frames normally:
+//! identity, TOC, and footer skippable frames and decompress the data frames
+//! normally:
 //!
 //! ```sh
 //! zstd -d archive.tar.zst | tar x
@@ -165,5 +194,5 @@ mod wrap;
 
 pub use crate::extract::ExtractOptions;
 pub use crate::filter::PathFilter;
-pub use crate::reader::{ReaderOptions, TarzanReader, VerifyRecord, VerifyStatus};
+pub use crate::reader::{TarzanReader, VerifyRecord, VerifyStatus};
 pub use crate::wrap::{WrapOptions, wrap, wrap_with};

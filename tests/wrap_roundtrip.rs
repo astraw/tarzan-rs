@@ -67,7 +67,7 @@ fn wrap_writes_identity_skippable_frame_prefix() {
     assert_eq!(&wrapped[4..8], (6u32).to_le_bytes().as_slice());
     assert_eq!(&wrapped[8..12], b"TRZN");
     assert_eq!(wrapped[12], tarzan::format::FRAME_TYPE_IDENTITY);
-    assert_eq!(wrapped[13], tarzan::format::identity::IDENTITY_VERSION_V1);
+    assert_eq!(wrapped[13], tarzan::format::identity::IDENTITY_VERSION_V2);
 
     let decompressed =
         zstd::stream::decode_all(Cursor::new(wrapped)).expect("zstd decode should succeed");

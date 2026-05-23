@@ -81,12 +81,11 @@ fn large_member_is_split_into_multiple_chunks() {
         .expect("extract should succeed");
     assert_eq!(extracted, data, "extracted data must match the original");
 
-    // Every chunk's recorded checksum must verify.
+    // Every member's content SHA-256 must verify.
     for record in reader.verify_all().expect("verify should succeed") {
         assert!(
             matches!(record.status, tarzan::VerifyStatus::Ok),
-            "chunk {} of {} failed verification",
-            record.chunk_index,
+            "{} failed verification",
             record.path
         );
     }

@@ -34,7 +34,7 @@ Standard `.tar.gz` and `.tar.zst` archives are sequential. To find a file near t
 end, you decompress everything before it. For large archives this is slow, wasteful,
 and makes random access effectively impossible without external tooling.
 
-`tarzan` solves this with three ideas:
+`tarzan` solves this with four ideas:
 
 **1. Tunable chunk compression.** The archive is divided into independently compressed
 zstd frames at configurable chunk boundaries. Chunk size is a tuneable tradeoff:
@@ -49,11 +49,22 @@ ownership, sizes, and per-chunk byte offsets — is stored in a zstd skippable f
 appended to the archive. Any compliant zstd decoder silently ignores skippable frames,
 so the archive is fully readable by `zstd -d | tar x` with no special support.
 
-**3. Leading identity frame.** The first bytes of every tarzan archive are a small
+**3. Leading identity frame.** The first 14 bytes of every tarzan archive are a small
 zstd skippable frame containing the ASCII identifier `TRZN` followed by a format
 version byte. This allows `file(1)` and other format sniffers to identify tarzan
 archives unambiguously, distinct from plain `.tar.zst` or other zstd-based formats.
 Standard zstd tools skip this frame silently.
+
+**4. Fixed-size trailing footer.** The last 38 bytes of every tarzan archive are a
+small zstd skippable frame containing the TOC's byte offset, its size, and an
+XXHash64 of every byte before the footer. Readers seek directly to the TOC in a
+single operation regardless of archive size — no scanning. The hash gives
+`tarzan verify --quick` a way to validate the whole archive in one sequential
+read, without decompressing anything. Per-file integrity is layered on top: every
+data frame carries zstd's own XXHash64 content checksum (caught at decompress
+time), and every regular-file TOC entry records a `content_sha256` in the same
+format `sha256sum` produces — so you can compare against an on-disk copy without
+running tarzan.
 
 The result is an archive where:
 - The original tar data is stored bit-for-bit intact inside the compressed stream
@@ -216,7 +227,7 @@ the display differs.
 
 `--json` emits the TOC as a pretty-printed JSON array. Each entry
 carries path, type, size, mode, uid, gid, mtime, optional link target,
-and chunk offsets:
+content SHA-256 (for regular files), and chunk offsets:
 
 ```json
 [
@@ -229,16 +240,27 @@ and chunk offsets:
     "gid": 1000,
     "mtime": 1730643742,
     "tar_offset": 1024,
+    "content_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "chunks": [
       {
         "compressed_offset": 1024,
         "compressed_size": 1891,
-        "uncompressed_size": 4301,
-        "sha256": "e3b0c44298fc1c149afb..."
+        "uncompressed_size": 4301
       }
     ]
   }
 ]
+```
+
+`content_sha256` is the SHA-256 of the file's bytes — no tar header, no
+padding — in the same format `sha256sum` prints. To check whether your
+local copy of an archived file matches what was recorded at wrap time:
+
+```sh
+tarzan list --json -f archive.tar.zst \
+  | jq -r '.[] | select(.content_sha256) | "\(.content_sha256)  \(.path)"' \
+  > archive.sha256sums
+sha256sum -c archive.sha256sums
 ```
 
 Each entry in `chunks` locates one member's bytes inside a compressed
@@ -280,6 +302,10 @@ tarzan x -v -f archive.tar.zst
 
 # Do not restore recorded mtimes (extracted files get the current time)
 tarzan extract -f archive.tar.zst --no-mtime
+
+# Survive bit-rot: log and skip members whose data won't decompress,
+# rather than aborting the whole extraction
+tarzan extract -f archive.tar.zst --skip-bad-chunks
 ```
 
 Restored on extract: file contents, directory hierarchy, Unix permission
@@ -342,7 +368,7 @@ tarzan info --json -f archive.tar.zst
 ```
 
 ```text
-Format:          tarzan v1
+Format:          tarzan v2
 File:            archive.tar.zst
 Size:            487.2 MB
 Uncompressed:    2.3 GB
@@ -351,7 +377,7 @@ Data frames:     486.4 MB (sum of compressed frames)
 Members:         1847
 Chunks:          4203
 Avg chunk size:  574.5 KB (uncompressed)
-Identity frame:  TRZN v1
+Identity frame:  TRZN v2
 TOC frame:       312.0 KB at offset 487204816
 ```
 
@@ -380,21 +406,38 @@ omitted: the archive does not record a creation timestamp, and the
 chunk-size argument is a wrap-time tunable rather than archive metadata
 (use `Avg chunk size` as an observed proxy).
 
-### `tarzan verify` — verify chunk checksums
+### `tarzan verify` — verify checksums
 
 Silent on success by default; exits non-zero on mismatch. Pass `-v`
-to also print an `OK` line per verified member.
+to also print an `OK` line per verified item.
+
+By default `verify` walks the TOC, extracts each regular file's content,
+and compares its SHA-256 against the `content_sha256` recorded at wrap
+time. zstd's per-frame XXHash64 checksum is verified automatically along
+the way. With `--quick`, the per-file work is skipped entirely; the
+archive is re-hashed once with XXHash64 and compared against the value
+stored in the trailing footer — one sequential read, no decompression.
 
 ```sh
-# Verify all chunk SHA-256s
+# Full per-file verification (decompresses every chunk)
 tarzan verify -f archive.tar.zst
 
-# Verify a specific file
+# Verify a specific file's content hash
 tarzan verify -f archive.tar.zst src/main.rs
 
 # Show per-member OK lines
 tarzan verify -v -f archive.tar.zst
+
+# Whole-archive integrity check (fast; one sequential read)
+tarzan verify --quick -f archive.tar.zst
 ```
+
+The two modes catch different things. `--quick` catches any byte-level
+damage to the archive file (including stray bytes appended after the
+original) but doesn't, by itself, detect every kind of zstd-level
+corruption — zstd's own per-frame checksum only fires during
+decompression. Full verify catches per-file mismatches at the cost of
+decompressing every frame.
 
 ---
 
@@ -411,8 +454,8 @@ The identity frame occupies the first 14 bytes of every tarzan archive.
 
 ```sh
 xxd -l 14 archive.tar.zst
-# 00000000: 542a 4d18 0600 0000 5452 5a4e 0101       T*M.....TRZN..
-#           └── 0x184D2A54 ──┘           └TRZN┘
+# 00000000: 542a 4d18 0600 0000 5452 5a4e 0102       T*M.....TRZN..
+#           └── 0x184D2A54 ──┘           └TRZN┘  └── version byte (v2)
 #           zstd skippable magic   tarzan identifier at offset 8
 ```
 
@@ -423,7 +466,7 @@ database, which then wins on strength over the tarzan pattern:
 
 ```sh
 MAGIC=contrib/tarzan.magic file archive.tar.zst
-# archive.tar.zst: tarzan archive v1
+# archive.tar.zst: tarzan archive v2
 ```
 
 ---
@@ -470,10 +513,41 @@ skips a few of its older ergonomics:
 | Decompression speed | slow | fast | fast | ok |
 | Self-describing format | ✗ | ✗ | ✓ | ✓ |
 | Per-file integrity checksums | ✗ | ✗ | ✓ | optional |
+| Whole-archive integrity hash | ✗ | ✗ | ✓ | ✗ |
 
 † Slightly lower than monolithic `.tar.zst` due to per-frame independent compression,
 which loses redundancy across frame boundaries. Small members are packed together so
 redundancy is still captured within a frame; for most archives the difference is under 5%.
+
+---
+
+## What happens when bits flip
+
+Independent zstd frames give tarzan crash isolation: damage to one data frame
+takes out one member (or a handful of small members that share a frame), not
+the whole archive. Damage to the metadata regions is more severe — they are
+single-copy by design — but the underlying tar data is still recoverable
+through standard tools.
+
+| Damaged region | What tarzan does | Fallback that still works |
+|---|---|---|
+| Identity frame (first 14 B) | `tarzan open` rejects the file as not a tarzan archive | `zstd -d archive.tar.zst \| tar x` |
+| One data frame | only the affected member(s) fail to extract; zstd's per-frame XXHash64 checksum catches the corruption during decompression, with the per-member SHA-256 as a second line of defense at the file-content level | `tarzan extract --skip-bad-chunks` to keep going past it |
+| TOC frame | open rejects the file (TOC won't decompress) | `zstd -d \| tar x` for full recovery |
+| Footer | open rejects the file | `zstd -d \| tar x` for full recovery |
+| Just the hash bytes in the footer | open succeeds; `tarzan verify --quick` reports the mismatch | full per-chunk verify still works |
+
+For the only case where partial recovery is interesting — bit-rot inside one
+data frame — `tarzan extract --skip-bad-chunks` logs the bad member to stderr,
+removes the partial output file, and continues with the remaining members.
+Without the flag, the first unreadable chunk aborts the whole extract; that's
+the safer default for backups where you'd rather notice a problem than
+silently end up with a partial restore.
+
+If you care about long-term archive durability, pair tarzan with a filesystem
+that detects bit-rot (ZFS, btrfs with checksums) or external redundancy
+(par2, replicated backups). tarzan won't reconstruct lost bytes — its job is
+to detect corruption and isolate the blast radius.
 
 ---
 
@@ -484,7 +558,7 @@ tools. Add it to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-tarzan = "0.1"
+tarzan = "0.2"
 ```
 
 Full API documentation — including format details and usage examples — is on
@@ -507,72 +581,6 @@ archiving with a clean, documented, versioned format specification.
 tarzan archives are not wire-compatible with zstd:chunked, but the ideas are directly
 borrowed from that project. Credit to Giuseppe Scrivano and the containers/storage
 contributors.
-
----
-
-## Design decisions
-
-### TOC sidecar mode (considered, deferred)
-
-A natural extension of the embedded TOC is to also serialize it as a standalone file
-(e.g. `archive.tar.toc`) that accompanies a plain `.tar` — enabling random access
-without the zstd wrapper, including for tape workflows. This is intentionally
-deferred from v1.
-
-Why deferred:
-
-- *Drift.* Sidecar files get separated from their data through copy, move, or
-  transfer. A stale sidecar fails silently unless every read verifies a whole-tar
-  hash, which is an O(n) scan that partly defeats the point of having an index.
-- *Schema bifurcation.* Per-member offsets mean different things in embedded mode
-  (compressed chunk offsets) vs. sidecar mode (uncompressed tar byte offsets). The
-  format would have to express "this field is valid only in mode X" rules and
-  ship two parsing paths.
-- *Crowded prior art.* [ratarmount](https://github.com/mxmlnkn/ratarmount) already
-  ships a SQLite-based tar index. Users who want random access to plain tar have a
-  deployed solution; introducing a competing format needs a stronger motivation
-  than "we could."
-- *Pitch dilution.* tarzan's value proposition is "drop-in seekable `.tar.zst`,
-  standard tools still work." A sidecar mode reframes tarzan as a generic tar
-  index format and pulls it into a different and more crowded design space.
-- *Tape is not really solved by a TOC file alone.* Useful tape random access needs
-  blocking-factor and (for multi-volume) volume-boundary metadata, not just member
-  offsets. Claiming tape support without that would be misleading.
-
-**Forward-compatibility reservations.** The v1 TOC schema is nevertheless designed
-so a sidecar variant remains feasible later without breaking v1 readers:
-
-- Every member entry carries `tar_offset` (uncompressed byte offset of the member
-  header in the tar stream). This is independently useful for verification and is
-  the field any future sidecar would need.
-- A top-level `target` field (default `"embedded"`) is reserved. Readers must
-  reject unknown values, so adding `"sidecar"` later is not a breaking change.
-- Top-level `tar_sha256` and `tar_size` are reserved as optional fields, to be
-  populated by future sidecars so readers can detect drift loudly rather than
-  silently using stale offsets.
-
-No file extension or on-disk sidecar layout is specified at this time — once
-documented, it has to be supported.
-
-### Why not GNU tar's `--index-file`
-
-`tar --index-file=FILE` is sometimes proposed as the natural sidecar format, but it
-is the wrong reference point. It redirects the `-v` listing to a file — bare paths
-at `-v`, `ls -l`-style lines at `-vv`:
-
-```text
-drwxr-xr-x andrew/wheel      0 2026-05-18 16:29 ./
--rw-r--r-- andrew/wheel     10 2026-05-18 16:29 ./b.txt
--rw-r--r-- andrew/wheel      6 2026-05-18 16:29 ./sub/c.txt
-```
-
-There are no byte offsets, no checksums, no schema, no versioning, and no extension
-hook. The file tells you *what* is in the archive, not *where*, so it cannot serve
-as a seek index. Reusing the format would either ship a sidecar that does not
-actually enable seeking, or extend it past the point of any compatibility with GNU
-tar. [ratarmount](https://github.com/mxmlnkn/ratarmount)'s SQLite index is the
-closest existing format that actually solves the random-access problem and is the
-better reference if a sidecar mode is ever revisited.
 
 ---
 

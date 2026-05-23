@@ -4,7 +4,7 @@
 
 use std::io::Cursor;
 
-use tarzan::format::{self, toc::TocFrame};
+use tarzan::format::{self, footer::FOOTER_FRAME_SIZE, toc::TocFrame};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -24,23 +24,19 @@ fn wrap(raw: &[u8]) -> Vec<u8> {
 }
 
 fn decode_toc(wrapped: &[u8]) -> TocFrame {
-    let magic = format::SKIPPABLE_FRAME_MAGIC.to_le_bytes();
-    let end = wrapped.len();
-    for p in (0..=end.saturating_sub(8)).rev() {
-        if wrapped[p..p + 4] != magic {
-            continue;
-        }
-        let payload_size = u32::from_le_bytes(wrapped[p + 4..p + 8].try_into().unwrap()) as usize;
-        if p + 8 + payload_size != end {
-            continue;
-        }
-        let payload = &wrapped[p + 8..];
-        if payload.len() >= 5 && &payload[0..4] == b"TRZN" && payload[4] == format::FRAME_TYPE_TOC {
-            return tarzan::format::toc::decode_toc_payload(payload)
-                .expect("TOC decode should succeed");
-        }
-    }
-    panic!("no TOC frame found in archive");
+    // The footer is the last 62 bytes; it points to the TOC frame.
+    let total = wrapped.len() as u64;
+    assert!(total >= FOOTER_FRAME_SIZE, "archive shorter than a footer");
+    let footer_start = (total - FOOTER_FRAME_SIZE) as usize;
+    let footer = tarzan::format::footer::decode_footer_payload(&wrapped[footer_start + 8..])
+        .expect("footer decode should succeed");
+    let toc_start = footer.toc_offset as usize;
+    let toc_end = toc_start + footer.toc_frame_size as usize;
+    let frame = &wrapped[toc_start..toc_end];
+    let payload = &frame[8..];
+    assert_eq!(&payload[0..4], b"TRZN", "TOC payload missing TRZN");
+    assert_eq!(payload[4], format::FRAME_TYPE_TOC, "TOC payload wrong type");
+    tarzan::format::toc::decode_toc_payload(payload).expect("TOC decode should succeed")
 }
 
 fn single_file_tar(path: &str, mode: u32, content: &[u8]) -> Vec<u8> {
@@ -75,12 +71,12 @@ fn identity_frame_is_first() {
 }
 
 #[test]
-fn toc_frame_is_last() {
+fn toc_frame_precedes_footer() {
     let raw = single_file_tar("x.txt", 0o644, b"hi");
     let wrapped = wrap(&raw);
 
-    let toc = decode_toc(&wrapped); // panics if not found at end
-    assert_eq!(toc.tarzan_version, 1);
+    let toc = decode_toc(&wrapped);
+    assert_eq!(toc.tarzan_version, 2);
 }
 
 // ── empty file ────────────────────────────────────────────────────────────────

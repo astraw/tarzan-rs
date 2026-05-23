@@ -144,6 +144,14 @@ enum Commands {
         #[arg(long = "no-mtime")]
         no_mtime: bool,
 
+        /// Continue past members whose data fails to decompress (e.g.
+        /// because of bit-rot in their data frame). The bad member is
+        /// logged to stderr and removed from the output; the rest of
+        /// the archive is extracted normally. Without this flag, the
+        /// first unreadable chunk aborts the whole extraction.
+        #[arg(long = "skip-bad-chunks")]
+        skip_bad_chunks: bool,
+
         /// Print each member to stderr as it is extracted.
         #[arg(short = 'v', long = "verbose")]
         verbose: bool,
@@ -181,9 +189,18 @@ enum Commands {
         file: PathBuf,
 
         /// Restrict verification to a single member path; omit to verify
-        /// every member.
+        /// every member. Incompatible with `--quick`.
         #[arg(value_name = "PATH")]
         path: Option<String>,
+
+        /// Skip per-chunk decompression and only verify the whole-archive
+        /// SHA-256 stored in the footer. One sequential read of the file
+        /// instead of decompressing every chunk; catches any byte-level
+        /// corruption (including stray bytes appended after the archive)
+        /// but not, by itself, intra-chunk corruption that would only
+        /// surface as garbled output during extract.
+        #[arg(long = "quick", conflicts_with = "path")]
+        quick: bool,
 
         /// Print an `OK` line for every successfully-verified member.
         /// Without this flag, verify is silent on success and only
@@ -280,21 +297,26 @@ fn main() -> Result<()> {
             strip_components,
             exclude,
             no_mtime,
+            skip_bad_chunks,
             verbose,
             paths,
         } => cmd_extract::run(
             &file,
             &directory,
-            strip_components,
-            exclude,
-            paths,
-            !no_mtime,
+            tarzan::ExtractOptions {
+                strip_components,
+                excludes: exclude,
+                includes: paths,
+                restore_mtime: !no_mtime,
+                skip_bad_chunks,
+            },
             verbose,
         ),
         Commands::Verify {
             file,
             path,
+            quick,
             verbose,
-        } => cmd_verify::run(&file, path.as_deref(), verbose),
+        } => cmd_verify::run(&file, path.as_deref(), quick, verbose),
     }
 }

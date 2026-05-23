@@ -231,7 +231,7 @@ fn file_magic_identifies_tarzan_archive() {
         .expect("failed to run file");
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
-        stdout.contains("tarzan archive v1"),
+        stdout.contains("tarzan archive v2"),
         "`file` did not recognize the archive via the magic pattern: {stdout}"
     );
 }

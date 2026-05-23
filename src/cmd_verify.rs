@@ -3,8 +3,19 @@ use std::path::Path;
 use anyhow::{Result, bail};
 use tarzan::{TarzanReader, VerifyStatus};
 
-pub fn run(archive: &Path, target_path: Option<&str>, verbose: bool) -> Result<()> {
+pub fn run(archive: &Path, target_path: Option<&str>, quick: bool, verbose: bool) -> Result<()> {
     let mut reader = TarzanReader::open(archive)?;
+
+    if quick {
+        if target_path.is_some() {
+            bail!("--quick verifies the whole archive and cannot be combined with a path filter");
+        }
+        reader.verify_archive_hash()?;
+        if verbose {
+            println!("OK  whole-archive hash");
+        }
+        return Ok(());
+    }
 
     let records = match target_path {
         Some(path) => reader.verify_member(path)?,
@@ -26,8 +37,8 @@ pub fn run(archive: &Path, target_path: Option<&str>, verbose: bool) -> Result<(
                 any_checksum = true;
                 any_failure = true;
                 eprintln!(
-                    "FAIL  {} (chunk {}): expected {}, got {}",
-                    record.path, record.chunk_index, expected, actual
+                    "FAIL  {}: expected {}, got {}",
+                    record.path, expected, actual
                 );
             }
             VerifyStatus::NoChecksum => {}
