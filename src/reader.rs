@@ -76,7 +76,7 @@ impl TarzanReader {
             IDENTITY_VERSION_V2 => {}
             IDENTITY_VERSION_V1_LEGACY => bail!(
                 "Legacy v1 format. Please decode files using zstd -d and \
-                re-wrap them in a supported format."
+                re-wrap them."
             ),
             other => bail!(
                 "unsupported tarzan format version {other}; this build understands v{IDENTITY_VERSION_V2}"
