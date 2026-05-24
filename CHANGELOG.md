@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/astraw/tarzan-rs/compare/v0.1.2...v0.2.0) - 2026-05-24
+
+### Added
+
+- [**breaking**] tarzan v2 format — TOC offset footer, per-member SHA-256, XXHash64 (claude-opus-4-7)
+
+### Other
+
+- *(deps)* drop tar's default xattr feature; regen THIRD-PARTY-LICENSES (claude-opus-4-7)
+- gate local-time list rendering as unix-only (claude-opus-4-7)
+- run on every branch, not just main (claude-opus-4-7)
+- run tests on Linux, macOS, and Windows; pin testdata to LF (claude-opus-4-7)
+
 ## [0.1.2](https://github.com/astraw/tarzan-rs/compare/v0.1.1...v0.1.2) - 2026-05-23
 
 ### Fixed
