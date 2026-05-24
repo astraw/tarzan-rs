@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1](https://github.com/astraw/tarzan-rs/compare/v0.2.0...v0.2.1) - 2026-05-24
+
+### Fixed
+
+- cap wrap window buffer (claude-opus-4-7)
+
+### Other
+
+- write TOC frame directly to save memory (claude-opus-4-7)
+- simplify v1 legacy format error message
+- release v0.2.0
+
 ## [0.2.0](https://github.com/astraw/tarzan-rs/compare/v0.1.2...v0.2.0) - 2026-05-24
 
 ### Added
