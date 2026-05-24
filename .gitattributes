@@ -1,0 +1,4 @@
+# Keep fixture files byte-identical across platforms — tests assert on
+# exact bytes after wrap/unwrap roundtrips, so an autocrlf checkout on
+# Windows would otherwise alter them.
+testdata/** -text

@@ -7,8 +7,11 @@ on:
   pull_request:
 
 jobs:
+  # Linux carries the OS-agnostic checks (fmt, clippy, the
+  # THIRD-PARTY-LICENSES libzstd sanity check) on top of the test suite.
+  # The other two jobs run the test suite only.
   check:
-    name: fmt, clippy & test
+    name: lint + test (linux)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -32,6 +35,36 @@ jobs:
 
       - name: Clippy (warnings denied)
         run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test
+
+  test-macos:
+    name: test (macos)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Test
+        run: cargo test
+
+  # Tests that touch Unix-only APIs (symlink creation, MetadataExt mtime,
+  # Unix permission bits) are gated with `#[cfg(unix)]` and don't compile
+  # in here. The remaining tests shell out to `tar`, which Windows
+  # provides as bsdtar.
+  test-windows:
+    name: test (windows)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Test
         run: cargo test
