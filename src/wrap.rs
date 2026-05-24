@@ -68,6 +68,11 @@ impl Window {
         let n = (offset - self.base) as usize;
         self.buf.drain(..n);
         self.base = offset;
+
+        let target = self.buf.len().max(8 * 1024 * 1024);
+        if self.buf.capacity() > target.saturating_mul(2) {
+            self.buf.shrink_to(target);
+        }
     }
 }
 

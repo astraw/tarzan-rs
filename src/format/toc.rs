@@ -97,7 +97,9 @@ pub fn write_toc_frame<W: Write>(out: &mut W, toc: &TocFrame, level: i32) -> Res
         let mut encoder = zstd::stream::write::Encoder::new(&mut compressed, level)
             .context("failed to create zstd encoder for TOC")?;
         serde_json::to_writer(&mut encoder, toc).context("failed to serialize TOC to JSON")?;
-        encoder.finish().context("failed to finish TOC zstd frame")?;
+        encoder
+            .finish()
+            .context("failed to finish TOC zstd frame")?;
     }
 
     // Skippable-frame payload: TRZN + frame type + version + compressed JSON.
