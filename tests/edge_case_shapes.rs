@@ -195,6 +195,138 @@ fn multiple_entries_all_appear_in_toc() {
     }
 }
 
+// ── PAX size override ─────────────────────────────────────────────────────────
+//
+// When a file's size exceeds the 8 GB octal limit of the ustar header, GNU/BSD
+// tars commonly emit a PAX `x` extended header with `size=<N>` and set the
+// in-header `size` field to zero. The tar crate honours the override via
+// `entry.size()`; using `header.size()` would return zero and misroute the
+// member into the small-member group, leaving its data unflushed in the
+// streaming window. We don't fabricate a multi-GB file here — header size=0
+// with PAX size=<actual> is enough to exercise the same code path.
+
+fn write_header_block(out: &mut Vec<u8>, name: &str, size: u64, entry_type: tar::EntryType) {
+    let mut h = tar::Header::new_ustar();
+    h.set_path(name).unwrap();
+    h.set_size(size);
+    h.set_mode(0o644);
+    h.set_uid(0);
+    h.set_gid(0);
+    h.set_mtime(0);
+    h.set_entry_type(entry_type);
+    h.set_cksum();
+    out.extend_from_slice(h.as_bytes());
+}
+
+fn pad_to_block(out: &mut Vec<u8>) {
+    let rem = out.len() % 512;
+    if rem != 0 {
+        out.resize(out.len() + (512 - rem), 0);
+    }
+}
+
+/// Builds a tar where the only entry carries `actual_size` bytes of data but
+/// its in-header size field reads 0; a preceding PAX `x` header overrides it.
+fn pax_size_override_tar(path: &str, content: &[u8]) -> Vec<u8> {
+    // PAX record format: "<len> size=<n>\n", where <len> is the total length
+    // of the line including the digits, the space, the key=value, and the
+    // newline. We pick a length that's self-consistent.
+    let value = content.len().to_string();
+    let suffix = format!(" size={value}\n");
+    // Find the smallest len whose ASCII representation, prepended to suffix,
+    // matches the total length of the line.
+    let mut len_digits = 1;
+    let record = loop {
+        let total = len_digits + suffix.len();
+        let s = format!("{total}{suffix}");
+        if s.len() == total {
+            break s;
+        }
+        len_digits += 1;
+    };
+
+    let mut out = Vec::new();
+
+    // PAX 'x' header naming the file the override applies to.
+    write_header_block(
+        &mut out,
+        &format!("PaxHeaders/{path}"),
+        record.len() as u64,
+        tar::EntryType::XHeader,
+    );
+    out.extend_from_slice(record.as_bytes());
+    pad_to_block(&mut out);
+
+    // Main entry with header size=0; tar honours the PAX `size=` override
+    // when streaming the data.
+    write_header_block(&mut out, path, 0, tar::EntryType::Regular);
+    out.extend_from_slice(content);
+    pad_to_block(&mut out);
+
+    // End-of-archive: two zero blocks.
+    out.extend_from_slice(&[0u8; 1024]);
+    out
+}
+
+#[test]
+fn pax_size_override_records_actual_size_in_toc() {
+    let content = b"AAAA".repeat(64); // 256 bytes; header size=0, PAX size=256.
+    let raw = pax_size_override_tar("data.bin", &content);
+    let toc = decode_toc(&wrap(&raw));
+    let m = toc
+        .members
+        .iter()
+        .find(|m| m.path.contains("data.bin"))
+        .expect("data.bin must appear in TOC");
+    assert_eq!(
+        m.size,
+        content.len() as u64,
+        "TOC must reflect the PAX-overridden size, not the zero in-header size"
+    );
+}
+
+#[test]
+fn pax_size_override_roundtrips_tar_bytes() {
+    let content = b"AAAA".repeat(64);
+    let raw = pax_size_override_tar("data.bin", &content);
+    let wrapped = wrap(&raw);
+    let decoded = zstd::stream::decode_all(Cursor::new(&wrapped)).unwrap();
+    assert_eq!(
+        decoded, raw,
+        "wrap → zstd-decode must reproduce the input tar byte-for-byte"
+    );
+}
+
+#[test]
+fn pax_size_override_routes_through_large_member_path() {
+    // With chunk_size smaller than the member's PAX-overridden size, the
+    // member must land in the large-member path (a single chunk recorded
+    // with frame_offset = 0), not into a shared small-member group.
+    let content = vec![0xAB; 4096];
+    let raw = pax_size_override_tar("data.bin", &content);
+
+    let mut wrapped = Vec::new();
+    tarzan::wrap(
+        Cursor::new(&raw),
+        &mut wrapped,
+        tarzan::WrapOptions::default().chunk_size(1024),
+    )
+    .expect("wrap should succeed");
+
+    let toc = decode_toc(&wrapped);
+    let m = toc
+        .members
+        .iter()
+        .find(|m| m.path.contains("data.bin"))
+        .expect("data.bin must appear in TOC");
+    assert_eq!(m.size, content.len() as u64);
+    assert!(
+        m.chunks.iter().all(|c| c.frame_offset == 0),
+        "large member's chunks must each start at frame_offset 0; got {:?}",
+        m.chunks
+    );
+}
+
 #[test]
 fn multiple_entries_roundtrip_tar_bytes() {
     let raw = make_tar(|b| {

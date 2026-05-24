@@ -4,6 +4,7 @@ use std::rc::Rc;
 
 use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
+use tracing::debug;
 
 use crate::format::{
     footer::{Footer, encode_footer_frame},
@@ -213,6 +214,18 @@ where
             prev_entry_end = entry_end;
             let idx = members.len();
             members.push(member);
+
+            {
+                let w = window.borrow();
+                debug!(
+                    members_len = members.len(),
+                    window_len = w.buf.len(),
+                    window_capacity = w.buf.capacity(),
+                    region_size,
+                    pos,
+                    "wrap loop state"
+                );
+            }
 
             if region_size >= chunk_size {
                 // Large member: it gets its own frames, split at chunk_size.
@@ -484,6 +497,16 @@ where
     }
     group.clear();
     *group_size = 0;
+    {
+        let w = window.borrow();
+        debug!(
+            members_len = members.len(),
+            window_len = w.buf.len(),
+            window_capacity = w.buf.capacity(),
+            pos = *pos,
+            "flush_group state"
+        );
+    }
     Ok(())
 }
 
@@ -563,7 +586,11 @@ fn read_member_metadata<R: Read>(entry: &tar::Entry<'_, R>) -> Result<TocMember>
         .context("failed to read entry path")?
         .to_string_lossy()
         .into_owned();
-    let size = header.size().context("failed to read entry size")?;
+    // `entry.size()` honours PAX `size=` overrides, which the ustar octal
+    // size field cannot encode beyond 8 GB; `header.size()` would return the
+    // (typically zero) in-header value and misroute the giant member into
+    // the small-member group, leaving its data unflushed in the window.
+    let size = entry.size();
     let mode = header.mode().context("failed to read entry mode")?;
     let uid = header.uid().context("failed to read entry uid")?;
     let gid = header.gid().context("failed to read entry gid")?;
