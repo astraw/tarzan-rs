@@ -363,7 +363,9 @@ fn list_verbose_and_json_are_mutually_exclusive() {
 
 /// Builds an archive whose plain listing exceeds the OS pipe buffer (~64 KiB).
 /// 5 000 entries × ~15 bytes each = ~75 KiB, which guarantees a write block
-/// before a `head -1` reader drains the pipe.
+/// before a `head -1` reader drains the pipe. Only the Unix broken-pipe test
+/// uses this; gated to match.
+#[cfg(unix)]
 fn big_archive(temp: &tempfile::TempDir) -> PathBuf {
     use std::io::Cursor;
 

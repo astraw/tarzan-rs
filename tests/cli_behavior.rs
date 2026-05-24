@@ -69,6 +69,11 @@ fn file_tar_with_mtime(name: &str, mtime: u64) -> Vec<u8> {
     builder.into_inner().expect("finish tar")
 }
 
+// Local-time rendering relies on `libc::localtime_r`, which is only wired up
+// behind `#[cfg(unix)]`. `tarzan list -v` on Windows therefore renders UTC
+// regardless of `TZ`; the test asserts a New York-local hour and so only
+// holds on Unix.
+#[cfg(unix)]
 #[test]
 fn list_verbose_renders_local_time_then_utc() {
     // 1_700_000_000 == 2023-11-14 22:13 UTC == 2023-11-14 17:13 in New York
