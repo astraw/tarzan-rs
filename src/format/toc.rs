@@ -1,7 +1,12 @@
+use std::io::Write;
+
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use super::{FRAME_TYPE_TOC, encode_skippable_frame, identity::IDENTITY_MAGIC};
+use super::{
+    FRAME_TYPE_TOC,
+    identity::{IDENTITY_MAGIC, SKIPPABLE_FRAME_MAGIC},
+};
 
 pub const TOC_VERSION_V1: u8 = 1;
 
@@ -66,16 +71,57 @@ fn is_zero(n: &u64) -> bool {
 /// Encodes a `TocFrame` as a tarzan skippable frame ready to append to an archive.
 ///
 /// Payload layout: `TRZN` + `FRAME_TYPE_TOC` + `TOC_VERSION_V1` + zstd-compressed JSON.
+///
+/// Equivalent to [`write_toc_frame`] but collects the bytes into a `Vec` — prefer
+/// `write_toc_frame` in the wrap path so we never materialise the whole frame in
+/// memory.
 pub fn encode_toc_frame(toc: &TocFrame, level: i32) -> Result<Vec<u8>> {
-    let json = serde_json::to_vec(toc).context("failed to serialize TOC to JSON")?;
-    let compressed = zstd::bulk::compress(&json, level).context("failed to compress TOC JSON")?;
-    let payload = [
-        IDENTITY_MAGIC.as_slice(),
-        &[FRAME_TYPE_TOC, TOC_VERSION_V1],
-        compressed.as_slice(),
-    ]
-    .concat();
-    Ok(encode_skippable_frame(&payload))
+    let mut out = Vec::new();
+    write_toc_frame(&mut out, toc, level)?;
+    Ok(out)
+}
+
+/// Writes the TOC frame directly to `out` and returns the number of bytes
+/// written.
+///
+/// Avoids the two largest allocations that `encode_toc_frame` historically held
+/// simultaneously: the uncompressed JSON `Vec<u8>` and the assembled-frame
+/// `Vec<u8>`. We still buffer the compressed payload (the skippable-frame
+/// header has to carry its length, so we cannot start writing it until we know
+/// the size); for typical TOCs that buffer is ~10× smaller than the JSON.
+pub fn write_toc_frame<W: Write>(out: &mut W, toc: &TocFrame, level: i32) -> Result<u64> {
+    // Stream serde_json straight through the zstd encoder so the uncompressed
+    // JSON never exists as a single allocation.
+    let mut compressed: Vec<u8> = Vec::new();
+    {
+        let mut encoder = zstd::stream::write::Encoder::new(&mut compressed, level)
+            .context("failed to create zstd encoder for TOC")?;
+        serde_json::to_writer(&mut encoder, toc).context("failed to serialize TOC to JSON")?;
+        encoder.finish().context("failed to finish TOC zstd frame")?;
+    }
+
+    // Skippable-frame payload: TRZN + frame type + version + compressed JSON.
+    let payload_len = IDENTITY_MAGIC.len() + 2 + compressed.len();
+    if payload_len > u32::MAX as usize {
+        bail!(
+            "compressed TOC payload ({payload_len} bytes) exceeds the {} byte \
+             skippable-frame limit; archive has too many members",
+            u32::MAX
+        );
+    }
+
+    out.write_all(&SKIPPABLE_FRAME_MAGIC.to_le_bytes())
+        .context("failed to write TOC frame magic")?;
+    out.write_all(&(payload_len as u32).to_le_bytes())
+        .context("failed to write TOC frame length")?;
+    out.write_all(&IDENTITY_MAGIC)
+        .context("failed to write TOC payload identifier")?;
+    out.write_all(&[FRAME_TYPE_TOC, TOC_VERSION_V1])
+        .context("failed to write TOC frame header bytes")?;
+    out.write_all(&compressed)
+        .context("failed to write compressed TOC payload")?;
+
+    Ok(8u64 + payload_len as u64)
 }
 
 /// Hard cap on the decompressed size of the TOC's JSON payload. A producer

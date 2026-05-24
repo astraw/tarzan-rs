@@ -348,12 +348,11 @@ where
         tarzan_version: 2,
         members,
     };
-    let toc_frame =
-        crate::format::toc::encode_toc_frame(&toc, opts.level).context("failed to encode TOC")?;
     let toc_offset = pos;
-    let toc_frame_size = toc_frame.len() as u64;
-    output
-        .write_all(&toc_frame)
+    // Stream the TOC straight to `output` rather than buffering the whole
+    // compressed frame in memory. For large archives the uncompressed JSON
+    // alone can be many GB.
+    let toc_frame_size = crate::format::toc::write_toc_frame(&mut output, &toc, opts.level)
         .context("failed to write TOC frame")?;
 
     // The footer sits outside the hashed region and carries the hash of
