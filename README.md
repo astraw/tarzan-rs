@@ -62,9 +62,9 @@ single operation regardless of archive size — no scanning. The hash gives
 `tarzan verify --quick` a way to validate the whole archive in one sequential
 read, without decompressing anything. Per-file integrity is layered on top: every
 data frame carries zstd's own XXHash64 content checksum (caught at decompress
-time), and every regular-file TOC entry records a `content_sha256` in the same
-format `sha256sum` produces — so you can compare against an on-disk copy without
-running tarzan.
+time), and every regular-file TOC entry records a `content_sha256` (in the same
+format `sha256sum` produces) and a `content_md5` — so you can compare against an
+on-disk copy or an S3 ETag (for single-PUT uploads) without running tarzan.
 
 The result is an archive where:
 - The original tar data is stored bit-for-bit intact inside the compressed stream
@@ -241,6 +241,7 @@ content SHA-256 (for regular files), and chunk offsets:
     "mtime": 1730643742,
     "tar_offset": 1024,
     "content_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "content_md5": "d41d8cd98f00b204e9800998ecf8427e",
     "chunks": [
       {
         "compressed_offset": 1024,
@@ -253,8 +254,14 @@ content SHA-256 (for regular files), and chunk offsets:
 ```
 
 `content_sha256` is the SHA-256 of the file's bytes — no tar header, no
-padding — in the same format `sha256sum` prints. To check whether your
-local copy of an archived file matches what was recorded at wrap time:
+padding — in the same format `sha256sum` prints. `content_md5` is the MD5
+of the same bytes, provided for interoperability with systems that expose
+MD5 checksums (e.g. S3 ETags for single-PUT uploads). Note that S3 ETags
+for multipart uploads are not the plain MD5 of the object and will not
+match this field. For cryptographic integrity, use `content_sha256`.
+
+To check whether your local copy of an archived file matches what was
+recorded at wrap time:
 
 ```sh
 tarzan list --json -f archive.tar.zst \

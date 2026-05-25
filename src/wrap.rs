@@ -248,8 +248,9 @@ where
                 // For regular files we also fold each scratch read into a
                 // streaming SHA-256 of the member's content; chunks get drained
                 // from the window before we could go back and hash from there.
-                let mut content_hasher =
-                    matches!(members[idx].entry_type, EntryType::File).then(Sha256::new);
+                let is_file = matches!(members[idx].entry_type, EntryType::File);
+                let mut content_hasher = is_file.then(Sha256::new);
+                let mut md5_ctx = is_file.then(md5::Context::new);
                 let mut data_left = members[idx].size;
                 while data_left > 0 {
                     let want = data_left.min(scratch.len() as u64) as usize;
@@ -264,6 +265,9 @@ where
                     }
                     if let Some(h) = &mut content_hasher {
                         h.update(&scratch[..n]);
+                    }
+                    if let Some(ctx) = &mut md5_ctx {
+                        ctx.consume(&scratch[..n]);
                     }
                     data_left -= n as u64;
                     while window.borrow().end() - next_chunk_start >= chunk_size {
@@ -283,6 +287,9 @@ where
                 }
                 if let Some(h) = content_hasher {
                     members[idx].content_sha256 = Some(finalize_sha256_hex(h));
+                }
+                if let Some(ctx) = md5_ctx {
+                    members[idx].content_md5 = Some(format!("{:x}", ctx.compute()));
                 }
 
                 pending = Some(Pending::Large { idx, entry_end });
@@ -417,7 +424,9 @@ where
         let content_start = members[idx].tar_offset + 512;
         let content_end = content_start + members[idx].size;
         let w = window.borrow();
-        members[idx].content_sha256 = Some(sha256_hex(w.slice(content_start, content_end)));
+        let content = w.slice(content_start, content_end);
+        members[idx].content_sha256 = Some(sha256_hex(content));
+        members[idx].content_md5 = Some(format!("{:x}", md5::compute(content)));
     }
 
     if !group.is_empty() && *group_size + region_size > chunk_size {
@@ -614,6 +623,7 @@ fn read_member_metadata<R: Read>(entry: &tar::Entry<'_, R>) -> Result<TocMember>
         // Filled in later: from the window during small-member grouping,
         // from a streaming hasher in the large-member read loop.
         content_sha256: None,
+        content_md5: None,
         chunks: Vec::new(),
     })
 }

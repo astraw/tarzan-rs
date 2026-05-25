@@ -94,6 +94,7 @@
 //!       "mtime": 1730643742,
 //!       "tar_offset": 1024,
 //!       "content_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+//!       "content_md5": "d41d8cd98f00b204e9800998ecf8427e",
 //!       "chunks": [
 //!         {
 //!           "compressed_offset": 1024,

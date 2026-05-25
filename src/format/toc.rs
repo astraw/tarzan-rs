@@ -36,6 +36,13 @@ pub struct TocMember {
     /// without invoking tarzan.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_sha256: Option<String>,
+    /// MD5 of the member's file content (no headers, no padding), as
+    /// 32-character lowercase hex. Populated for regular files; `None`
+    /// otherwise. Provided for interoperability with systems that expose MD5
+    /// checksums (e.g. S3 ETags for single-PUT uploads). For cryptographic
+    /// integrity use `content_sha256`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_md5: Option<String>,
     pub chunks: Vec<ChunkInfo>,
 }
 

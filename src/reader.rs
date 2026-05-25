@@ -512,6 +512,7 @@ mod tests {
                 tar_offset: 0,
                 link_target: None,
                 content_sha256: None,
+                content_md5: None,
                 chunks: vec![ChunkInfo {
                     compressed_offset: 14,
                     compressed_size: 0,
@@ -622,6 +623,7 @@ mod tests {
             tar_offset: 0,
             link_target: None,
             content_sha256: None,
+            content_md5: None,
             chunks: vec![ChunkInfo {
                 compressed_offset: off,
                 compressed_size: size,
@@ -656,6 +658,7 @@ mod tests {
             tar_offset: 0,
             link_target: None,
             content_sha256: None,
+            content_md5: None,
             chunks: vec![ChunkInfo {
                 compressed_offset: off,
                 compressed_size: size,
@@ -690,6 +693,7 @@ mod tests {
             tar_offset: 0,
             link_target: None,
             content_sha256: None,
+            content_md5: None,
             chunks: vec![ChunkInfo {
                 compressed_offset: off,
                 compressed_size: 0,

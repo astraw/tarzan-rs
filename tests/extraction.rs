@@ -220,6 +220,57 @@ fn content_sha256_matches_for_large_member_spanning_chunks() {
     assert_eq!(*recorded, expected);
 }
 
+#[test]
+fn content_md5_matches_for_small_member() {
+    let content = b"this is the file body";
+    let raw = single_file_tar("hello.txt", content);
+    let (_dir, path) = wrap_to_file(&raw);
+
+    let reader = TarzanReader::open(&path).expect("open");
+    let m = reader
+        .members()
+        .iter()
+        .find(|m| m.path == "hello.txt")
+        .expect("member present");
+
+    let recorded = m
+        .content_md5
+        .as_ref()
+        .expect("regular files must record content_md5");
+    let expected = format!("{:x}", md5::compute(content));
+    assert_eq!(*recorded, expected);
+}
+
+#[test]
+fn content_md5_matches_for_large_member_spanning_chunks() {
+    // chunk_size=4 KiB and a 16 KiB body forces the wrap into the large-member
+    // streaming path; the md5::Context must accumulate all chunks correctly.
+    let content: Vec<u8> = (0..16 * 1024).map(|i| (i % 251) as u8).collect();
+    let raw = single_file_tar("big.bin", &content);
+
+    let dir = tempdir().expect("tempdir");
+    let path = dir.path().join("archive.tar.zst");
+    let f = std::fs::File::create(&path).unwrap();
+    tarzan::wrap(
+        Cursor::new(&raw),
+        f,
+        tarzan::WrapOptions::default().chunk_size(4 * 1024),
+    )
+    .expect("wrap");
+
+    let reader = TarzanReader::open(&path).expect("open");
+    let m = reader
+        .members()
+        .iter()
+        .find(|m| m.path == "big.bin")
+        .unwrap();
+    assert!(m.chunks.len() > 1, "large member should span >1 chunk");
+
+    let recorded = m.content_md5.as_ref().expect("hash must be present");
+    let expected = format!("{:x}", md5::compute(&content));
+    assert_eq!(*recorded, expected);
+}
+
 // ── --skip-bad-chunks: corruption survival ───────────────────────────────────
 
 /// Wraps three small files with a chunk size that forces each member into its
