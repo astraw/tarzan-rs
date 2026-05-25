@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/astraw/tarzan-rs/compare/v0.2.2...v0.3.0) - 2026-05-25
+
+### Added
+
+- store content_md5 in TOC for S3 ETag interoperability (claude-sonnet-4-6)
+
 ## [0.2.2](https://github.com/astraw/tarzan-rs/compare/v0.2.1...v0.2.2) - 2026-05-24
 
 ### Fixed
