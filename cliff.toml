@@ -1,8 +1,0 @@
-# git-cliff configuration — https://git-cliff.org/docs/configuration
-#
-# Used by release-plz for version bumping and changelog generation.
-# features_always_increment_minor = false keeps feat: commits at patch-level
-# for this pre-1.0 library; reserve minor bumps for deliberate API additions.
-
-[bump]
-features_always_increment_minor = false

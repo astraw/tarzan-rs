@@ -11,5 +11,6 @@ git_tag_enable = true
 # cargo-dist creates the GitHub release with the built binaries
 # attached, so release-plz must not also create one.
 git_release_enable = false
-# Custom git-cliff config: feat: triggers patch, not minor (pre-1.0 policy).
-changelog_config = "cliff.toml"
+# Pre-1.0 policy: feat: commits bump patch, not minor. Minor bumps are
+# reserved for deliberate API additions once the library reaches 1.0.
+features_always_increment_minor = false
