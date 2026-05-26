@@ -30,17 +30,23 @@ pub struct TocMember {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_target: Option<String>,
     /// SHA-256 of the member's file content (no headers, no padding), as
-    /// 64-character lowercase hex. Populated for regular files; `None` for
-    /// directories, symlinks, hard links, and device nodes. Format and value
-    /// match `sha256sum`'s output, so users can verify against on-disk files
-    /// without invoking tarzan.
+    /// 64-character lowercase hex. Format and value match `sha256sum`'s
+    /// output, so users can verify against on-disk files without invoking
+    /// tarzan.
+    ///
+    /// **Writers must populate this field for every regular file.** It is
+    /// `None` only for non-file entries (directories, symlinks, hard links,
+    /// device nodes) where content does not exist.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_sha256: Option<String>,
     /// MD5 of the member's file content (no headers, no padding), as
-    /// 32-character lowercase hex. Populated for regular files; `None`
-    /// otherwise. Provided for interoperability with systems that expose MD5
-    /// checksums (e.g. S3 ETags for single-PUT uploads). For cryptographic
-    /// integrity use `content_sha256`.
+    /// 32-character lowercase hex. Provided for interoperability with systems
+    /// that expose MD5 checksums (e.g. S3 ETags for single-PUT uploads). For
+    /// cryptographic integrity use `content_sha256`.
+    ///
+    /// This field is optional per entry: a writer may populate it for all
+    /// regular files, for none, or selectively. Readers must not assume it is
+    /// present even if other entries in the same archive carry it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_md5: Option<String>,
     pub chunks: Vec<ChunkInfo>,

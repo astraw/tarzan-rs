@@ -3,6 +3,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use tarzan::TarzanReader;
+use tarzan::format::toc::EntryType;
 
 use crate::util::format_size;
 
@@ -11,6 +12,18 @@ pub fn run(archive: &Path, json: bool) -> Result<()> {
 
     let members = reader.members();
     let member_count = members.len();
+    let regular_files = members
+        .iter()
+        .filter(|m| m.entry_type == EntryType::File)
+        .count() as u64;
+    let sha256_count = members
+        .iter()
+        .filter(|m| m.entry_type == EntryType::File && m.content_sha256.is_some())
+        .count() as u64;
+    let md5_count = members
+        .iter()
+        .filter(|m| m.entry_type == EntryType::File && m.content_md5.is_some())
+        .count() as u64;
     let uncompressed: u64 = members
         .iter()
         .flat_map(|m| m.chunks.iter())
@@ -45,6 +58,9 @@ pub fn run(archive: &Path, json: bool) -> Result<()> {
             "data_frame_bytes": compressed,
             "ratio": ratio_value,
             "members": member_count,
+            "regular_files": regular_files,
+            "content_sha256_count": sha256_count,
+            "content_md5_count": md5_count,
             "chunks": chunk_count,
             "avg_chunk_size_bytes": avg_chunk_bytes,
             "toc_offset": toc_offset,
@@ -73,6 +89,14 @@ pub fn run(archive: &Path, json: bool) -> Result<()> {
         format_size(compressed)
     );
     println!("Members:         {member_count}");
+    println!(
+        "content_sha256:  {}",
+        checksum_summary(sha256_count, regular_files)
+    );
+    println!(
+        "content_md5:     {}",
+        checksum_summary(md5_count, regular_files)
+    );
     println!("Chunks:          {chunk_count}");
     println!("Avg chunk size:  {avg_chunk} (uncompressed)");
     println!("Identity frame:  TRZN v{identity_version}");
@@ -83,4 +107,12 @@ pub fn run(archive: &Path, json: bool) -> Result<()> {
     );
 
     Ok(())
+}
+
+fn checksum_summary(count: u64, regular_files: u64) -> String {
+    if regular_files == 0 || count == 0 {
+        "absent".to_owned()
+    } else {
+        format!("present ({count}/{regular_files})")
+    }
 }
