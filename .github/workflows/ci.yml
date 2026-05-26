@@ -78,7 +78,7 @@ jobs:
             exit 0
           fi
           echo "Comparing against $LAST_TAG"
-          if cargo semver-checks check-release --baseline-rev "$LAST_TAG"; then
+          if cargo semver-checks check-release --baseline-rev "$LAST_TAG" --default-features; then
             exit 0
           fi
           # cargo-semver-checks found a breaking change.  Acceptable only when the
