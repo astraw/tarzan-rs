@@ -11,6 +11,16 @@
 //! A command-line tool (`tarzan`) is also available — see the
 //! [tarzan-rs repository](https://github.com/astraw/tarzan-rs).
 //!
+//! # AI-assisted development
+//!
+//! This crate was developed with substantial AI assistance. The implementation
+//! was generated iteratively using Claude language models (Anthropic) — primarily
+//! Claude Opus 4.7 and Claude Sonnet 4.6, with a small number of early commits
+//! from Gemma 4 31B — under continuous human direction and review. Every commit
+//! records the contributing model in the subject line. Correctness is validated
+//! through the test suite (`cargo test`), CI on Linux, macOS, and Windows, and
+//! iterative round-trip testing against real archives during development.
+//!
 //! # File format
 //!
 //! A tarzan archive is a valid zstd stream with four sections:

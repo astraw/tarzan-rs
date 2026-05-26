@@ -658,6 +658,33 @@ what is there).
 
 ---
 
+## AI-assisted development
+
+`tarzan` was developed with substantial AI assistance. The implementation was
+generated iteratively using large language models — primarily Claude Opus 4.7 and
+Claude Sonnet 4.6 (Anthropic), with a small number of early commits from Gemma 4
+31B (Google) — under continuous direction and review by the human author. Every
+commit records the contributing model in its subject line.
+
+**Validation.** Correctness is validated through:
+
+- An automated test suite (`cargo test`) covering wrapping, listing, extracting,
+  verifying, error paths, and round-trip integrity
+- CI that runs tests on Linux, macOS, and Windows on every push
+- Iterative testing against real tar archives during development, with the human
+  author reviewing each change before it was committed
+
+**Known gaps.** Coverage is thinner in a few areas:
+
+- **Windows** — builds pass CI but the platform is otherwise untested in practice
+- **Performance** — no formal benchmarks against comparable tools (pixz, zip,
+  plain tar.zst) have been run on realistic workloads
+- **Long-tail tar features** — sparse files, xattrs, device files, and ACLs are
+  delegated to the `tar | tarzan wrap` pipeline rather than handled internally;
+  that delegation path is not independently tested
+
+---
+
 ## Contributing
 
 Contributions are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) before
