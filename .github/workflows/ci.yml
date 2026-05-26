@@ -50,6 +50,43 @@ jobs:
       - name: Test
         run: cargo test
 
+  # Runs cargo-semver-checks against the last version tag.  If a breaking
+  # API change is detected, the job requires at least one commit since that
+  # tag to acknowledge it with feat!:, fix!:, or a BREAKING CHANGE footer.
+  semver-check:
+    name: semver compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-semver-checks
+      - name: Check for undeclared breaking changes
+        run: |
+          LAST_TAG=$(git describe --tags --match 'v*' --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$LAST_TAG" ]; then
+            echo "No prior version tag; skipping semver check."
+            exit 0
+          fi
+          echo "Comparing against $LAST_TAG"
+          if cargo semver-checks check-release --baseline-rev "$LAST_TAG"; then
+            exit 0
+          fi
+          # cargo-semver-checks found a breaking change.  Acceptable only when the
+          # conventional-commit history since the last tag acknowledges it.
+          COMMITS=$(git log "${LAST_TAG}..HEAD" --format="%s%n%b")
+          if echo "$COMMITS" | grep -qE '^(feat|fix|[a-z]+)(\([^)]*\))?!:|BREAKING[ -]CHANGE'; then
+            echo "Breaking change is acknowledged in commit history — version bump required."
+            exit 0
+          fi
+          echo "::error::cargo-semver-checks found a breaking API change not acknowledged"
+          echo "::error::in any commit since ${LAST_TAG}.  Add feat!: / fix!: or a"
+          echo "::error::BREAKING CHANGE footer to the responsible commit, or revert the break."
+          exit 1
+
   # Tests that touch Unix-only APIs (symlink creation, MetadataExt mtime,
   # Unix permission bits) are gated with `#[cfg(unix)]` and don't compile
   # in here. The remaining tests shell out to `tar`, which Windows
