@@ -570,7 +570,7 @@ fn compress_frame<W: Write>(
     let compressed_offset = *pos;
     let compressed_size = {
         let mut counting = CountingWriter::new(&mut *output);
-        let mut encoder = zstd::stream::write::Encoder::new(&mut counting, level)
+        let mut encoder = crate::zstd_impl::Encoder::new(&mut counting, level)
             .context("failed to create zstd encoder")?;
         encoder
             .include_checksum(true)

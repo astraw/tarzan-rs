@@ -276,7 +276,7 @@ fn extract_by_index(
             .context("failed to seek to chunk")?;
         let limited = (&mut *source).take(chunk.compressed_size);
         let mut decoder =
-            zstd::stream::read::Decoder::new(limited).context("failed to create zstd decoder")?;
+            crate::zstd_impl::Decoder::new(limited).context("failed to create zstd decoder")?;
 
         // `frame_offset` skips past other members sharing this frame; `skip`
         // then skips this member's own extension headers and tar header.

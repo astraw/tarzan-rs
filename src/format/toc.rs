@@ -107,7 +107,7 @@ pub fn write_toc_frame<W: Write>(out: &mut W, toc: &TocFrame, level: i32) -> Res
     // JSON never exists as a single allocation.
     let mut compressed: Vec<u8> = Vec::new();
     {
-        let mut encoder = zstd::stream::write::Encoder::new(&mut compressed, level)
+        let mut encoder = crate::zstd_impl::Encoder::new(&mut compressed, level)
             .context("failed to create zstd encoder for TOC")?;
         serde_json::to_writer(&mut encoder, toc).context("failed to serialize TOC to JSON")?;
         encoder
@@ -170,7 +170,7 @@ pub fn decode_toc_payload(payload: &[u8]) -> Result<TocFrame> {
     }
     // Take 1 extra byte past the limit so we can distinguish "exactly at
     // limit" from "over limit" with a single read.
-    let mut decoder = zstd::stream::read::Decoder::new(std::io::Cursor::new(&payload[6..]))
+    let mut decoder = crate::zstd_impl::Decoder::new(std::io::Cursor::new(&payload[6..]))
         .context("failed to create zstd decoder for TOC")?;
     let mut json = Vec::new();
     decoder

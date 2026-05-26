@@ -602,6 +602,7 @@ dependencies = [
  "tracing-subscriber",
  "twox-hash",
  "zstd",
+ "zstd-pure-rs",
 ]
 
 [[package]]
@@ -904,6 +905,12 @@ checksum = "e91ee311a569c327171651566e07972200e76fcfe2242a4fa446149a3881c08a"
 dependencies = [
  "zstd-safe",
 ]
+
+[[package]]
+name = "zstd-pure-rs"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5ce022be20a46a5bf7c6b61f0fe68e29ff7a004ebc76bb829079eb201ec2d633"
 
 [[package]]
 name = "zstd-safe"

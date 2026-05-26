@@ -34,8 +34,14 @@ jobs:
       - name: Clippy (warnings denied)
         run: cargo clippy --all-targets -- -D warnings
 
+      - name: Clippy (pure-rust feature)
+        run: cargo clippy --all-targets --no-default-features --features pure-rust -- -D warnings
+
       - name: Test
         run: cargo test
+
+      - name: Test (pure-rust feature)
+        run: cargo test --no-default-features --features pure-rust
 
   test-macos:
     name: test (macos)

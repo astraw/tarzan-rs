@@ -568,6 +568,21 @@ tools. Add it to your `Cargo.toml`:
 tarzan = "0.2"
 ```
 
+### Cargo features
+
+| Feature | Default | Description |
+|---|---|---|
+| `zstd-sys` | ✓ | Links the zstd C library via `zstd-sys`. Best compression performance. |
+| `pure-rust` | | Pure-Rust zstd via `zstd-pure-rs`. No C toolchain required; useful for cross-compilation. |
+
+Exactly one of the two features must be active. To opt into the pure-Rust build,
+disable the default features and enable `pure-rust`:
+
+```toml
+[dependencies]
+tarzan = { version = "0.2", default-features = false, features = ["pure-rust"] }
+```
+
 Full API documentation — including format details and usage examples — is on
 [docs.rs/tarzan](https://docs.rs/tarzan).
 

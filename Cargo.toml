@@ -10,6 +10,11 @@ authors = ["Andrew Straw"]
 keywords = ["tar", "zstd", "archive", "compression", "seekable"]
 categories = ["compression", "filesystem", "command-line-utilities"]
 
+[features]
+default = ["zstd-sys"]
+zstd-sys = ["dep:zstd"]
+pure-rust = ["dep:zstd-pure-rs"]
+
 [dependencies]
 anyhow = "1.0"
 clap = { version = "4.5", features = ["derive"] }
@@ -27,7 +32,8 @@ tar = { version = "0.4", default-features = false }
 twox-hash = { version = "2", default-features = false, features = ["xxhash64"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt", "env-filter"] }
-zstd = "0.13"
+zstd = { version = "0.13", optional = true }
+zstd-pure-rs = { version = "0.1", optional = true }
 
 # Used only for `localtime_r` in `tarzan list -v` timestamp formatting,
 # which is gated to `#[cfg(unix)]`; Windows builds do not need it.
@@ -36,6 +42,8 @@ libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3.12"
+zstd = "0.13"
+zstd-pure-rs = "0.1"
 
 [[bin]]
 name = "tarzan"

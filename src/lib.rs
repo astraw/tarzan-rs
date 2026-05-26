@@ -197,6 +197,19 @@
 //! reader.extract_member("src/main.rs", &mut out)?;
 //! # Ok::<(), anyhow::Error>(())
 //! ```
+//!
+//! # Cargo features
+//!
+//! | Feature | Default | Description |
+//! |---|---|---|
+//! | `zstd-sys` | ✓ | Links the zstd C library via `zstd-sys`. Best performance. |
+//! | `pure-rust` | | Pure-Rust zstd via `zstd-pure-rs`. No C toolchain needed. |
+//!
+//! Exactly one feature must be active. For cross-compilation without a C toolchain:
+//!
+//! ```toml
+//! tarzan = { version = "0.2", default-features = false, features = ["pure-rust"] }
+//! ```
 
 mod extract;
 pub mod filter;
@@ -204,6 +217,7 @@ pub mod format;
 mod io;
 mod reader;
 mod wrap;
+mod zstd_impl;
 
 pub use crate::extract::ExtractOptions;
 pub use crate::filter::PathFilter;
