@@ -67,10 +67,12 @@
 //! - **Per data frame** — zstd's built-in XXHash64 content checksum is
 //!   enabled on every chunk, so a corrupted compressed byte fails at
 //!   decompress time with no extra work on the reader's side.
-//! - **Per member** — each regular-file entry's TOC record carries the
-//!   SHA-256 of the file's content (no headers, no padding). Format and
-//!   value match `sha256sum`'s output, so users can compare against
-//!   on-disk files without invoking tarzan.
+//! - **Per member** — each regular-file entry's TOC record carries a
+//!   `content_sha256` (SHA-256, same format as `sha256sum`) and a
+//!   `content_md5` (MD5, same format as `md5sum`, for interoperability
+//!   with systems that expose MD5 checksums such as S3 ETags for
+//!   single-PUT uploads). Both cover only the file's content bytes —
+//!   no tar headers, no padding.
 //! - **Whole archive** — the footer carries an XXHash64 over the entire
 //!   archive prefix. `tarzan verify --quick` re-hashes the file in one
 //!   sequential pass and compares; cheap end-to-end bit-rot detection
