@@ -1,6 +1,6 @@
 [package]
 name = "tarzan"
-version = "0.2.2"
+version = "0.3.0"
 description = "Random-access, seekable .tar.zst archives with an embedded table-of-contents index"
 edition = "2024"
 rust-version = "1.87"
