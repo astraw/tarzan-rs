@@ -365,7 +365,7 @@ where
                     members[idx].content_sha256 = Some(finalize_sha256_hex(h));
                 }
                 if let Some(ctx) = md5_ctx {
-                    members[idx].content_md5 = Some(format!("{:x}", ctx.compute()));
+                    members[idx].content_md5 = Some(format!("{:x}", ctx.finalize()));
                 }
 
                 pending = Some(Pending::Large { idx, entry_end });
