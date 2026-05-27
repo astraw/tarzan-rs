@@ -6,6 +6,8 @@
 # triggers on the tag that release-plz pushes.
 
 [workspace]
+# Automatically catch semver bumps.
+semver_check = true
 # Version is bumped from the crate's Conventional Commit history.
 git_tag_enable = true
 # cargo-dist creates the GitHub release with the built binaries
