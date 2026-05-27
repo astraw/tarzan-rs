@@ -109,6 +109,36 @@ fn extract_member_second_entry_correct() {
 }
 
 #[test]
+fn extract_member_checks_zstd_frame_trailer() {
+    let raw = single_file_tar("hello.txt", b"hello from tarzan cat!");
+    let (dir, path) = wrap_to_file(&raw);
+
+    let reader = TarzanReader::open(&path).expect("open");
+    let chunk = reader
+        .members()
+        .iter()
+        .find(|m| m.path == "hello.txt")
+        .expect("member present")
+        .chunks[0]
+        .clone();
+
+    let mut archive = std::fs::read(&path).expect("read archive");
+    let checksum_byte = (chunk.compressed_offset + chunk.compressed_size - 1) as usize;
+    archive[checksum_byte] ^= 0xff;
+
+    let corrupted_path = dir.path().join("corrupted.tar.zst");
+    std::fs::write(&corrupted_path, archive).expect("write corrupted archive");
+
+    let mut reader = TarzanReader::open(&corrupted_path).expect("open corrupted archive");
+    let mut out = Vec::new();
+    let result = reader.extract_member("hello.txt", &mut out);
+    assert!(
+        result.is_err(),
+        "extract_member should reject a corrupted zstd frame trailer"
+    );
+}
+
+#[test]
 fn extract_member_missing_path_errors() {
     let raw = single_file_tar("exists.txt", b"data");
     let (_dir, path) = wrap_to_file(&raw);

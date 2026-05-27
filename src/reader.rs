@@ -266,10 +266,6 @@ fn extract_by_index(
         if remaining == 0 {
             break;
         }
-        if skip >= chunk.uncompressed_size {
-            skip -= chunk.uncompressed_size;
-            continue;
-        }
 
         source
             .seek(SeekFrom::Start(chunk.compressed_offset))
@@ -278,6 +274,13 @@ fn extract_by_index(
         let mut decoder =
             crate::zstd_impl::Decoder::new(limited).context("failed to create zstd decoder")?;
 
+        if skip >= chunk.uncompressed_size {
+            std::io::copy(&mut decoder, &mut std::io::sink())
+                .context("failed to verify skipped zstd chunk")?;
+            skip -= chunk.uncompressed_size;
+            continue;
+        }
+
         // `frame_offset` skips past other members sharing this frame; `skip`
         // then skips this member's own extension headers and tar header.
         crate::io::skip_exact(&mut decoder, chunk.frame_offset + skip)
@@ -285,6 +288,7 @@ fn extract_by_index(
         let available = chunk.uncompressed_size - skip;
         let take = available.min(remaining);
         crate::io::copy_exact(&mut decoder, out, take).context("failed to copy file data")?;
+        std::io::copy(&mut decoder, &mut std::io::sink()).context("failed to finish zstd frame")?;
         skip = 0;
         remaining -= take;
     }
