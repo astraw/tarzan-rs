@@ -219,7 +219,7 @@ where
                 None => {}
             }
 
-            let member = read_member_metadata(&entry)?;
+            let member = read_member_metadata(&mut entry)?;
             // For GNU sparse the tar reader consumes the main header *and*
             // any continuation headers before yielding the entry, so the
             // data starts wherever the window currently ends. The on-disk
@@ -674,9 +674,27 @@ fn padded_data_size(size: u64) -> Result<u64> {
 }
 
 /// Reads an entry's metadata into a partial `TocMember` (with no `chunks`).
-fn read_member_metadata<R: Read>(entry: &tar::Entry<'_, R>) -> Result<TocMember> {
+///
+/// A regular-file entry whose merged PAX header carries any `GNU.sparse.*`
+/// key is a PAX-encoded sparse file (GNU tar formats 0.0, 0.1, 1.0). The
+/// `tar` crate does not interpret these as sparse, so the data on disk is
+/// the sparse-encoded blob, not the logical file content. Recording such
+/// an entry as `EntryType::File` would let consumers extract or hash the
+/// encoded blob and believe they had the original file. We downgrade it
+/// to `EntryType::Other` so the small-/large-member content-hashing path
+/// is skipped and tarzan's random-access tools refuse to treat it as a
+/// regular file. The raw tar bytes still round-trip verbatim, so
+/// `zstd -d | tar x` recovers the original file correctly.
+fn read_member_metadata<R: Read>(entry: &mut tar::Entry<'_, R>) -> Result<TocMember> {
+    let header_type = entry.header().entry_type();
+    let is_pax_sparse =
+        matches!(header_type, tar::EntryType::Regular) && has_pax_sparse_keys(entry)?;
+    let entry_type = if is_pax_sparse {
+        EntryType::Other
+    } else {
+        to_entry_type(header_type)
+    };
     let header = entry.header();
-    let entry_type = to_entry_type(header.entry_type());
     let path = entry
         .path()
         .context("failed to read entry path")?
@@ -733,6 +751,24 @@ fn finalize_sha256_hex(hasher: Sha256) -> String {
         .iter()
         .map(|b| format!("{b:02x}"))
         .collect()
+}
+
+/// Returns true if any of the entry's merged PAX keys begin with `GNU.sparse.`,
+/// indicating a PAX-encoded sparse file (formats 0.0, 0.1, 1.0).
+fn has_pax_sparse_keys<R: Read>(entry: &mut tar::Entry<'_, R>) -> Result<bool> {
+    let Some(exts) = entry
+        .pax_extensions()
+        .context("failed to read entry PAX extensions")?
+    else {
+        return Ok(false);
+    };
+    for ext in exts {
+        let ext = ext.context("malformed PAX extension")?;
+        if ext.key_bytes().starts_with(b"GNU.sparse.") {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn to_entry_type(t: tar::EntryType) -> EntryType {

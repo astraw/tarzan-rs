@@ -426,6 +426,99 @@ fn gnu_sparse_tar() -> Vec<u8> {
     out
 }
 
+/// Builds a tar containing a single regular-file entry preceded by a PAX
+/// `x` header whose records are the supplied (key, value) pairs.
+fn pax_prefixed_file_tar(path: &str, records: &[(&str, &str)], content: &[u8]) -> Vec<u8> {
+    fn encode_record(key: &str, value: &str) -> String {
+        let suffix = format!(" {key}={value}\n");
+        let mut len_digits = 1;
+        loop {
+            let total = len_digits + suffix.len();
+            let s = format!("{total}{suffix}");
+            if s.len() == total {
+                return s;
+            }
+            len_digits += 1;
+        }
+    }
+
+    let mut pax_data = String::new();
+    for (k, v) in records {
+        pax_data.push_str(&encode_record(k, v));
+    }
+
+    let mut out = Vec::new();
+    write_header_block(
+        &mut out,
+        &format!("PaxHeaders/{path}"),
+        pax_data.len() as u64,
+        tar::EntryType::XHeader,
+    );
+    out.extend_from_slice(pax_data.as_bytes());
+    pad_to_block(&mut out);
+    write_header_block(
+        &mut out,
+        path,
+        content.len() as u64,
+        tar::EntryType::Regular,
+    );
+    out.extend_from_slice(content);
+    pad_to_block(&mut out);
+    out.extend_from_slice(&[0u8; 1024]);
+    out
+}
+
+#[test]
+fn pax_encoded_sparse_entry_is_downgraded_to_other() {
+    // PAX-encoded GNU sparse (format 1.0) uses a regular-file entry type whose
+    // on-disk payload is the sparse-encoded blob — not the logical file. The
+    // `tar` crate does not interpret these as sparse, so a naive wrap would
+    // hash the blob and report a file size that does not match the original.
+    // We downgrade the TOC entry to `Other` so consumers cannot mistake the
+    // blob for the file content.
+    let blob = b"1\n0\n9\nreal-data\x00"; // not a valid 1.0 map; payload shape is unused here
+    let raw = pax_prefixed_file_tar(
+        "sparse.bin",
+        &[
+            ("GNU.sparse.major", "1"),
+            ("GNU.sparse.minor", "0"),
+            ("GNU.sparse.realsize", "4105"),
+            ("GNU.sparse.name", "sparse.bin"),
+        ],
+        blob,
+    );
+
+    let mut wrapped = Vec::new();
+    tarzan::wrap(
+        Cursor::new(&raw),
+        &mut wrapped,
+        tarzan::WrapOptions::default(),
+    )
+    .expect("wrap must accept PAX-encoded sparse entries");
+    let decoded = zstd::stream::decode_all(Cursor::new(&wrapped)).unwrap();
+    assert_eq!(decoded, raw, "tar bytes must round-trip verbatim");
+
+    let toc = decode_toc(&wrapped);
+    let member = toc
+        .members
+        .iter()
+        .find(|m| m.path == "sparse.bin")
+        .expect("TOC must contain the sparse entry");
+    assert_eq!(
+        member.entry_type,
+        tarzan::format::toc::EntryType::Other,
+        "PAX-encoded sparse must be marked as Other so tarzan cat refuses it"
+    );
+    assert!(
+        member.content_sha256.is_none(),
+        "Other entries must not carry a content_sha256 — the on-disk blob is not the file"
+    );
+    assert!(
+        member.content_md5.is_none(),
+        "Other entries must not carry a content_md5 — the on-disk blob is not the file"
+    );
+}
+
 #[test]
 fn gnu_sparse_entry_roundtrips_tar_bytes() {
     let raw = gnu_sparse_tar();
