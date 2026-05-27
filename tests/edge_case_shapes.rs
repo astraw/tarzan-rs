@@ -400,6 +400,45 @@ fn pax_size_that_overflows_tar_offsets_returns_error() {
     );
 }
 
+fn gnu_sparse_tar() -> Vec<u8> {
+    let data = b"real-data";
+    let mut out = Vec::new();
+
+    let mut h = tar::Header::new_gnu();
+    h.set_path("sparse.bin").unwrap();
+    h.set_size(data.len() as u64);
+    h.set_mode(0o644);
+    h.set_uid(0);
+    h.set_gid(0);
+    h.set_mtime(0);
+    h.set_entry_type(tar::EntryType::GNUSparse);
+    {
+        let gnu = h.as_gnu_mut().expect("new_gnu must produce a GNU header");
+        gnu.sparse[0].set_offset(4096);
+        gnu.sparse[0].set_length(data.len() as u64);
+        gnu.set_real_size(4096 + data.len() as u64);
+    }
+    h.set_cksum();
+    out.extend_from_slice(h.as_bytes());
+    out.extend_from_slice(data);
+    pad_to_block(&mut out);
+    out.extend_from_slice(&[0u8; 1024]);
+    out
+}
+
+#[test]
+#[should_panic(expected = "GNU sparse tar entries are not supported")]
+fn gnu_sparse_entry_currently_panics_when_unwrapped() {
+    let raw = gnu_sparse_tar();
+    let mut wrapped = Vec::new();
+    tarzan::wrap(
+        Cursor::new(&raw),
+        &mut wrapped,
+        tarzan::WrapOptions::default(),
+    )
+    .unwrap();
+}
+
 #[test]
 fn multiple_entries_roundtrip_tar_bytes() {
     let raw = make_tar(|b| {
