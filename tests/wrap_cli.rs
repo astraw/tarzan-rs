@@ -84,3 +84,55 @@ fn wrap_input_to_output_roundtrips() {
         .expect("failed to decode zstd output");
     assert_eq!(roundtrip, source_tar);
 }
+
+#[test]
+fn wrap_failure_preserves_existing_output_file() {
+    let temp = tempdir().expect("failed to create tempdir");
+    let bad_tar = temp.path().join("bad.tar");
+    let out_path = temp.path().join("existing.tar.zst");
+    let original = b"existing archive contents";
+    fs::write(&bad_tar, b"this is not a tar stream").expect("write bad tar");
+    fs::write(&out_path, original).expect("write existing output");
+
+    let output = Command::new(tarzan_bin())
+        .arg("wrap")
+        .arg(&bad_tar)
+        .arg("-f")
+        .arg(&out_path)
+        .output()
+        .expect("failed to run tarzan wrap");
+    assert!(
+        !output.status.success(),
+        "tarzan wrap should reject malformed input"
+    );
+    assert_eq!(
+        fs::read(&out_path).expect("read existing output"),
+        original,
+        "failed wrap must not truncate or replace an existing output file"
+    );
+}
+
+#[test]
+fn wrap_rejects_same_input_and_output_path() {
+    let temp = tempdir().expect("failed to create tempdir");
+    let tar_path = temp.path().join("input.tar");
+    create_tar_from_fixture(&tar_path);
+    let original = fs::read(&tar_path).expect("read source tar");
+
+    let output = Command::new(tarzan_bin())
+        .arg("wrap")
+        .arg(&tar_path)
+        .arg("-f")
+        .arg(&tar_path)
+        .output()
+        .expect("failed to run tarzan wrap");
+    assert!(
+        !output.status.success(),
+        "tarzan wrap should reject identical input and output paths"
+    );
+    assert_eq!(
+        fs::read(&tar_path).expect("read source tar after failed wrap"),
+        original,
+        "same-path rejection must not modify the input file"
+    );
+}

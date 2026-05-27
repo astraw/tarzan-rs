@@ -57,11 +57,23 @@ impl Window {
         self.base + self.buf.len() as u64
     }
 
-    /// Borrows the captured bytes for the absolute range `[start, end)`.
-    fn slice(&self, start: u64, end: u64) -> &[u8] {
+    /// Borrows the captured bytes for an absolute range derived from
+    /// untrusted tar metadata.
+    fn try_slice(&self, start: u64, end: u64) -> Result<&[u8]> {
+        if start > end {
+            bail!("invalid tar byte range: {start}..{end}");
+        }
+        if start < self.base || end > self.end() {
+            bail!(
+                "tar stream ended before byte range {start}..{end} was captured \
+                 (captured {}..{})",
+                self.base,
+                self.end()
+            );
+        }
         let lo = (start - self.base) as usize;
         let hi = (end - self.base) as usize;
-        &self.buf[lo..hi]
+        Ok(&self.buf[lo..hi])
     }
 
     /// Discards captured bytes before absolute offset `offset`.
@@ -209,8 +221,13 @@ where
 
             let member = read_member_metadata(&entry)?;
             let header_pos = entry.raw_header_position();
-            let entry_end = header_pos + 512 + member.size.div_ceil(512) * 512;
-            let region_size = entry_end - prev_entry_end;
+            let entry_end = padded_entry_end(header_pos, member.size)?;
+            let region_size = entry_end.checked_sub(prev_entry_end).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "tar entry {} starts before the previous entry ended",
+                    member.path
+                )
+            })?;
             prev_entry_end = entry_end;
             let idx = members.len();
             members.push(member);
@@ -342,6 +359,8 @@ where
         None => {}
     }
 
+    validate_end_of_archive(&window, prev_entry_end, total)?;
+
     flush_group(
         &mut output,
         &mut pos,
@@ -391,6 +410,7 @@ where
     inner
         .write_all(&footer)
         .context("failed to write footer frame")?;
+    inner.flush().context("failed to flush wrapped archive")?;
 
     Ok(())
 }
@@ -422,14 +442,22 @@ where
     // window until the group they belong to is flushed.
     if matches!(members[idx].entry_type, EntryType::File) {
         let content_start = members[idx].tar_offset + 512;
-        let content_end = content_start + members[idx].size;
+        let content_end = content_start
+            .checked_add(members[idx].size)
+            .ok_or_else(|| {
+                anyhow::anyhow!("member {} content range overflows", members[idx].path)
+            })?;
         let w = window.borrow();
-        let content = w.slice(content_start, content_end);
+        let content = w.try_slice(content_start, content_end)?;
         members[idx].content_sha256 = Some(sha256_hex(content));
         members[idx].content_md5 = Some(format!("{:x}", md5::compute(content)));
     }
 
-    if !group.is_empty() && *group_size + region_size > chunk_size {
+    let would_exceed_chunk = match group_size.checked_add(region_size) {
+        Some(size) => size > chunk_size,
+        None => true,
+    };
+    if !group.is_empty() && would_exceed_chunk {
         flush_group(
             output,
             pos,
@@ -443,7 +471,9 @@ where
         )?;
     }
     group.push((idx, region_size));
-    *group_size += region_size;
+    *group_size = group_size
+        .checked_add(region_size)
+        .ok_or_else(|| anyhow::anyhow!("grouped tar byte range overflows"))?;
     if *group_size >= chunk_size {
         flush_group(
             output,
@@ -482,7 +512,9 @@ where
         return Ok(());
     }
     let start = *next_chunk_start;
-    let end = start + *group_size;
+    let end = start
+        .checked_add(*group_size)
+        .ok_or_else(|| anyhow::anyhow!("grouped tar byte range overflows"))?;
 
     if let Some((compressed_offset, compressed_size)) =
         compress_frame(output, pos, window, start, end, level)?
@@ -495,7 +527,9 @@ where
                 uncompressed_size: *region_size,
                 frame_offset,
             });
-            frame_offset += region_size;
+            frame_offset = frame_offset
+                .checked_add(*region_size)
+                .ok_or_else(|| anyhow::anyhow!("grouped frame offset overflows"))?;
         }
     }
 
@@ -562,7 +596,7 @@ fn compress_frame<W: Write>(
     level: i32,
 ) -> Result<Option<(u64, u64)>> {
     let window = window.borrow();
-    let bytes = window.slice(start, end);
+    let bytes = window.try_slice(start, end)?;
     if bytes.is_empty() {
         return Ok(None);
     }
@@ -586,6 +620,43 @@ fn compress_frame<W: Write>(
     Ok(Some((compressed_offset, compressed_size)))
 }
 
+fn validate_end_of_archive(
+    window: &Rc<RefCell<Window>>,
+    marker_start: u64,
+    total: u64,
+) -> Result<()> {
+    let marker_end = marker_start
+        .checked_add(1024)
+        .ok_or_else(|| anyhow::anyhow!("tar end-of-archive marker offset overflows"))?;
+    if total < marker_end {
+        bail!(
+            "tar stream ended before the two-block end-of-archive marker \
+             (need at least {marker_end} bytes, got {total})"
+        );
+    }
+
+    let window = window.borrow();
+    let marker = window.try_slice(marker_start, marker_end)?;
+    if !marker.iter().all(|byte| *byte == 0) {
+        bail!("tar stream is missing the two-block end-of-archive marker");
+    }
+
+    Ok(())
+}
+
+fn padded_entry_end(header_pos: u64, size: u64) -> Result<u64> {
+    let padded_size = size
+        .checked_add(511)
+        .map(|size| size / 512 * 512)
+        .ok_or_else(|| anyhow::anyhow!("tar entry size {size} overflows"))?;
+    header_pos
+        .checked_add(512)
+        .and_then(|pos| pos.checked_add(padded_size))
+        .ok_or_else(|| {
+            anyhow::anyhow!("tar entry ending at {header_pos}+512+{padded_size} overflows")
+        })
+}
+
 /// Reads an entry's metadata into a partial `TocMember` (with no `chunks`).
 fn read_member_metadata<R: Read>(entry: &tar::Entry<'_, R>) -> Result<TocMember> {
     let header = entry.header();
@@ -595,6 +666,9 @@ fn read_member_metadata<R: Read>(entry: &tar::Entry<'_, R>) -> Result<TocMember>
         .context("failed to read entry path")?
         .to_string_lossy()
         .into_owned();
+    if header.entry_type().is_gnu_sparse() {
+        bail!("GNU sparse tar entries are not supported by wrap: {path}");
+    }
     // `entry.size()` honours PAX `size=` overrides, which the ustar octal
     // size field cannot encode beyond 8 GB; `header.size()` would return the
     // (typically zero) in-header value and misroute the giant member into

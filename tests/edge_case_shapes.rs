@@ -328,6 +328,79 @@ fn pax_size_override_routes_through_large_member_path() {
 }
 
 #[test]
+fn malformed_small_member_truncation_returns_error() {
+    let mut raw = Vec::new();
+    write_header_block(&mut raw, "truncated.bin", 100, tar::EntryType::Regular);
+
+    let mut wrapped = Vec::new();
+    let result = tarzan::wrap(
+        Cursor::new(&raw),
+        &mut wrapped,
+        tarzan::WrapOptions::default(),
+    );
+    assert!(
+        result.is_err(),
+        "truncated tar input must fail instead of producing an archive"
+    );
+}
+
+#[test]
+fn tar_without_end_of_archive_marker_returns_error() {
+    let mut raw = Vec::new();
+    write_header_block(&mut raw, "prefix-only.txt", 4, tar::EntryType::Regular);
+    raw.extend_from_slice(b"data");
+    pad_to_block(&mut raw);
+
+    let mut wrapped = Vec::new();
+    let result = tarzan::wrap(
+        Cursor::new(&raw),
+        &mut wrapped,
+        tarzan::WrapOptions::default(),
+    );
+    assert!(
+        result.is_err(),
+        "tar input missing the two zero end blocks must not wrap successfully"
+    );
+}
+
+#[test]
+fn pax_size_that_overflows_tar_offsets_returns_error() {
+    let huge_size = u64::MAX.to_string();
+    let suffix = format!(" size={huge_size}\n");
+    let mut len_digits = 1;
+    let record = loop {
+        let total = len_digits + suffix.len();
+        let s = format!("{total}{suffix}");
+        if s.len() == total {
+            break s;
+        }
+        len_digits += 1;
+    };
+
+    let mut raw = Vec::new();
+    write_header_block(
+        &mut raw,
+        "PaxHeaders/huge.bin",
+        record.len() as u64,
+        tar::EntryType::XHeader,
+    );
+    raw.extend_from_slice(record.as_bytes());
+    pad_to_block(&mut raw);
+    write_header_block(&mut raw, "huge.bin", 0, tar::EntryType::Regular);
+
+    let mut wrapped = Vec::new();
+    let result = tarzan::wrap(
+        Cursor::new(&raw),
+        &mut wrapped,
+        tarzan::WrapOptions::default(),
+    );
+    assert!(
+        result.is_err(),
+        "overflowing PAX size must fail instead of wrapping offset arithmetic"
+    );
+}
+
+#[test]
 fn multiple_entries_roundtrip_tar_bytes() {
     let raw = make_tar(|b| {
         for (name, content) in [
