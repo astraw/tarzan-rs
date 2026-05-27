@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0](https://github.com/astraw/tarzan-rs/compare/v0.3.0...v0.4.0) - 2026-05-27
+
+### Added
+
+- support wrapping GNU sparse tar entries (Opus 4.7)
+- added tarzan wrap --sync (GPT-5.5-Codex)
+
+### Fixed
+
+- [**breaking**] close TOC correctness gaps in wrap/TOC/readers while keeping schema at v2 (Opus 4.7 and GPT-5.3-Codex)
+- gnu tar sparse files (Opus 4.7)
+- various save-path issues found during adversarial wrap audit (GPT-5.5-Codex)
+- found and fixed one real corruption-detection bug (GPT-5.5-Codex)
+
+### Other
+
+- automatically catch semver bumps
+- added gnu tar sparse regression test (GPT-5.5-Codex)
+- update Cargo.lock
+- fix 'cargo semver-checks check-release' call
+
 ## [0.3.0](https://github.com/astraw/tarzan-rs/compare/v0.2.2...v0.3.0) - 2026-05-26
 
 ### Added

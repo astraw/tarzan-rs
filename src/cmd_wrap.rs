@@ -12,6 +12,7 @@ pub fn run(
     chunk_size: usize,
     level: i32,
     verbose: bool,
+    sync: bool,
 ) -> Result<()> {
     if output.is_none() && io::stdout().is_terminal() {
         bail!("refusing to write binary archive to terminal; use `-f FILE` or redirect stdout");
@@ -39,7 +40,13 @@ pub fn run(
                 );
             }
             let input_file = File::open(input_path)?;
-            wrap_to_output_file(BufReader::new(input_file), output_path, opts, on_member)?;
+            wrap_to_output_file(
+                BufReader::new(input_file),
+                output_path,
+                opts,
+                on_member,
+                sync,
+            )?;
         }
         (Some(input_path), None) => {
             info!(input = %input_path.display(), "wrapping tar stream to stdout");
@@ -52,7 +59,7 @@ pub fn run(
             info!(output = %output_path.display(), "wrapping stdin tar stream to file");
             let stdin = io::stdin();
             let input_lock = stdin.lock();
-            wrap_to_output_file(input_lock, output_path, opts, on_member)?;
+            wrap_to_output_file(input_lock, output_path, opts, on_member, sync)?;
         }
         (None, None) => {
             info!("wrapping stdin tar stream to stdout");
@@ -84,6 +91,7 @@ fn wrap_to_output_file<R, F>(
     output_path: &Path,
     opts: tarzan::WrapOptions,
     on_member: F,
+    sync: bool,
 ) -> Result<()>
 where
     R: Read,
@@ -104,6 +112,12 @@ where
         output
             .flush()
             .with_context(|| format!("flushing temporary output {}", temp_path.display()))?;
+        if sync {
+            output
+                .get_ref()
+                .sync_all()
+                .with_context(|| format!("syncing temporary output {}", temp_path.display()))?;
+        }
         fs::rename(&temp_path, output_path).with_context(|| {
             format!(
                 "renaming temporary output {} to {}",
@@ -111,6 +125,9 @@ where
                 output_path.display()
             )
         })?;
+        if sync {
+            sync_directory(parent)?;
+        }
         Ok(())
     })();
 
@@ -144,4 +161,19 @@ fn create_temp_output_file(parent: &Path, file_name: &str) -> Result<(PathBuf, F
         "could not allocate a temporary output path in {}",
         parent.display()
     )
+}
+
+fn sync_directory(path: &Path) -> Result<()> {
+    // Windows does not support opening a directory as a File for fsync;
+    // directory entry durability is handled by the OS on rename.
+    #[cfg(not(windows))]
+    {
+        File::open(path)
+            .with_context(|| format!("opening directory {} for sync", path.display()))?
+            .sync_all()
+            .with_context(|| format!("syncing directory {}", path.display()))?;
+    }
+    #[cfg(windows)]
+    let _ = path;
+    Ok(())
 }

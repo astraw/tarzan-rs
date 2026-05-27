@@ -86,6 +86,33 @@ fn wrap_input_to_output_roundtrips() {
 }
 
 #[test]
+fn wrap_sync_input_to_output_roundtrips() {
+    let temp = tempdir().expect("failed to create tempdir");
+    let tar_path = temp.path().join("input.tar");
+    let out_path = temp.path().join("output.tar.zst");
+    create_tar_from_fixture(&tar_path);
+
+    let status = Command::new(tarzan_bin())
+        .arg("wrap")
+        .arg("--sync")
+        .arg(&tar_path)
+        .arg("-f")
+        .arg(&out_path)
+        .status()
+        .expect("failed to run tarzan wrap --sync");
+    assert!(
+        status.success(),
+        "tarzan wrap --sync exited with non-zero status"
+    );
+
+    let source_tar = fs::read(&tar_path).expect("failed to read source tar");
+    let compressed = fs::read(&out_path).expect("failed to read compressed output");
+    let roundtrip = zstd::stream::decode_all(std::io::Cursor::new(compressed))
+        .expect("failed to decode zstd output");
+    assert_eq!(roundtrip, source_tar);
+}
+
+#[test]
 fn wrap_failure_preserves_existing_output_file() {
     let temp = tempdir().expect("failed to create tempdir");
     let bad_tar = temp.path().join("bad.tar");

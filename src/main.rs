@@ -56,6 +56,12 @@ enum Commands {
         /// is suppressed since the archive can't be re-read.
         #[arg(short = 'v', long = "verbose")]
         verbose: bool,
+
+        /// Sync the temporary archive file before rename and the containing
+        /// directory after rename. Slower, but improves durability across
+        /// crashes and some network/storage failure modes.
+        #[arg(long = "sync")]
+        sync: bool,
     },
 
     /// List archive contents using only the embedded TOC.
@@ -271,6 +277,7 @@ fn main() -> Result<()> {
             chunk_size,
             level,
             verbose,
+            sync,
         } => {
             let input = resolve_stream(input);
             let output = resolve_stream(file);
@@ -280,6 +287,7 @@ fn main() -> Result<()> {
                 chunk_size,
                 level,
                 verbose,
+                sync,
             )
         }
         Commands::Info { file, json } => cmd_info::run(&file, json),
