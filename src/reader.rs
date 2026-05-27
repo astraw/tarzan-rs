@@ -196,7 +196,7 @@ impl TarzanReader {
         let member_idx = self
             .members
             .iter()
-            .position(|m| m.path == target_path)
+            .position(|m| member_path_matches(m, target_path))
             .ok_or_else(|| anyhow::anyhow!("path not found in archive: {target_path}"))?;
         extract_by_index(&mut self.source, &self.members, member_idx, out)
     }
@@ -222,7 +222,7 @@ impl TarzanReader {
         let idx = self
             .members
             .iter()
-            .position(|m| m.path == target_path)
+            .position(|m| member_path_matches(m, target_path))
             .ok_or_else(|| anyhow::anyhow!("path not found in archive: {target_path}"))?;
         if !matches!(self.members[idx].entry_type, EntryType::File) {
             bail!("{target_path} is not a regular file");
@@ -242,6 +242,15 @@ fn extract_by_index(
 ) -> Result<()> {
     let member = &members[idx];
     if !matches!(member.entry_type, EntryType::File) {
+        if matches!(member.entry_type, EntryType::Other)
+            && let Some(raw) = member.raw_type_byte
+        {
+            bail!(
+                "{} has unsupported tar entry type '{}' (0x{raw:02x}); extract with `zstd -d | tar x`",
+                member.path,
+                raw as char
+            );
+        }
         bail!("{} is not a regular file", member.path);
     }
     if member.chunks.is_empty() {
@@ -301,6 +310,14 @@ fn extract_by_index(
     }
 
     Ok(())
+}
+
+fn member_path_matches(member: &TocMember, target_path: &str) -> bool {
+    member.path == target_path
+        || member
+            .path_bytes
+            .as_ref()
+            .is_some_and(|raw| raw == target_path.as_bytes())
 }
 
 /// `Write` impl that only hashes (discards bytes), used to compute the SHA-256
@@ -507,14 +524,25 @@ mod tests {
             tarzan_version: 2,
             members: vec![TocMember {
                 path: "x.txt".into(),
+                path_bytes: None,
                 entry_type: EntryType::File,
+                raw_type_byte: None,
                 size: 0,
                 mode: 0o644,
                 uid: 0,
                 gid: 0,
                 mtime: 0,
+                mtime_ns: None,
+                atime: None,
+                atime_ns: None,
+                ctime: None,
+                ctime_ns: None,
+                uname: None,
+                gname: None,
+                xattrs: None,
                 tar_offset: 0,
                 link_target: None,
+                link_target_bytes: None,
                 content_sha256: None,
                 content_md5: None,
                 chunks: vec![ChunkInfo {
@@ -618,14 +646,25 @@ mod tests {
         // overlap. The on-open layout validator must catch this.
         let m = |path: &str, off: u64, size: u64| TocMember {
             path: path.into(),
+            path_bytes: None,
             entry_type: EntryType::File,
+            raw_type_byte: None,
             size: 0,
             mode: 0o644,
             uid: 0,
             gid: 0,
             mtime: 0,
+            mtime_ns: None,
+            atime: None,
+            atime_ns: None,
+            ctime: None,
+            ctime_ns: None,
+            uname: None,
+            gname: None,
+            xattrs: None,
             tar_offset: 0,
             link_target: None,
+            link_target_bytes: None,
             content_sha256: None,
             content_md5: None,
             chunks: vec![ChunkInfo {
@@ -653,14 +692,25 @@ mod tests {
     fn open_rejects_chunk_pointing_into_toc_region() {
         let m = |off: u64, size: u64| TocMember {
             path: "x".into(),
+            path_bytes: None,
             entry_type: EntryType::File,
+            raw_type_byte: None,
             size: 0,
             mode: 0o644,
             uid: 0,
             gid: 0,
             mtime: 0,
+            mtime_ns: None,
+            atime: None,
+            atime_ns: None,
+            ctime: None,
+            ctime_ns: None,
+            uname: None,
+            gname: None,
+            xattrs: None,
             tar_offset: 0,
             link_target: None,
+            link_target_bytes: None,
             content_sha256: None,
             content_md5: None,
             chunks: vec![ChunkInfo {
@@ -688,14 +738,25 @@ mod tests {
     fn open_rejects_chunk_pointing_into_identity_frame() {
         let m = |off: u64| TocMember {
             path: "x".into(),
+            path_bytes: None,
             entry_type: EntryType::File,
+            raw_type_byte: None,
             size: 0,
             mode: 0o644,
             uid: 0,
             gid: 0,
             mtime: 0,
+            mtime_ns: None,
+            atime: None,
+            atime_ns: None,
+            ctime: None,
+            ctime_ns: None,
+            uname: None,
+            gname: None,
+            xattrs: None,
             tar_offset: 0,
             link_target: None,
+            link_target_bytes: None,
             content_sha256: None,
             content_md5: None,
             chunks: vec![ChunkInfo {

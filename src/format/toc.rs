@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::Write;
 
 use anyhow::{Context, Result, bail};
@@ -19,16 +20,38 @@ pub struct TocFrame {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TocMember {
     pub path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path_bytes: Option<Vec<u8>>,
     #[serde(rename = "type")]
     pub entry_type: EntryType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_type_byte: Option<u8>,
     pub size: u64,
     pub mode: u32,
     pub uid: u64,
     pub gid: u64,
     pub mtime: i64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtime_ns: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub atime: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub atime_ns: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ctime: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ctime_ns: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gname: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xattrs: Option<BTreeMap<String, Vec<u8>>>,
     pub tar_offset: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub link_target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link_target_bytes: Option<Vec<u8>>,
     /// SHA-256 of the member's file content (no headers, no padding), as
     /// 64-character lowercase hex. Format and value match `sha256sum`'s
     /// output, so users can verify against on-disk files without invoking

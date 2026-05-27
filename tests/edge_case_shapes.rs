@@ -218,6 +218,28 @@ fn write_header_block(out: &mut Vec<u8>, name: &str, size: u64, entry_type: tar:
     out.extend_from_slice(h.as_bytes());
 }
 
+fn write_header_block_raw_path(
+    out: &mut Vec<u8>,
+    path_bytes: &[u8],
+    size: u64,
+    entry_type: tar::EntryType,
+) {
+    let mut h = tar::Header::new_ustar();
+    h.set_size(size);
+    h.set_mode(0o644);
+    h.set_uid(0);
+    h.set_gid(0);
+    h.set_mtime(0);
+    h.set_entry_type(entry_type);
+    {
+        let block = h.as_mut_bytes();
+        let n = path_bytes.len().min(100);
+        block[0..n].copy_from_slice(&path_bytes[..n]);
+    }
+    h.set_cksum();
+    out.extend_from_slice(h.as_bytes());
+}
+
 fn pad_to_block(out: &mut Vec<u8>) {
     let rem = out.len() % 512;
     if rem != 0 {
@@ -468,6 +490,75 @@ fn pax_prefixed_file_tar(path: &str, records: &[(&str, &str)], content: &[u8]) -
     out
 }
 
+fn pax_global_header_tar(path: &str, content: &[u8]) -> Vec<u8> {
+    fn encode_record(key: &str, value: &str) -> String {
+        let suffix = format!(" {key}={value}\n");
+        let mut len_digits = 1;
+        loop {
+            let total = len_digits + suffix.len();
+            let s = format!("{total}{suffix}");
+            if s.len() == total {
+                return s;
+            }
+            len_digits += 1;
+        }
+    }
+
+    let mut out = Vec::new();
+    let global = encode_record("comment", "created-by-test");
+    write_header_block(
+        &mut out,
+        "pax_global_header",
+        global.len() as u64,
+        tar::EntryType::XGlobalHeader,
+    );
+    out.extend_from_slice(global.as_bytes());
+    pad_to_block(&mut out);
+    write_header_block(
+        &mut out,
+        path,
+        content.len() as u64,
+        tar::EntryType::Regular,
+    );
+    out.extend_from_slice(content);
+    pad_to_block(&mut out);
+    out.extend_from_slice(&[0u8; 1024]);
+    out
+}
+
+fn pax_size_mismatch_tar(path: &str) -> Vec<u8> {
+    let content = b"ABCDEFGHIJ"; // 10 bytes
+    let mut out = Vec::new();
+
+    let value = "10";
+    let suffix = format!(" size={value}\n");
+    let mut len_digits = 1;
+    let record = loop {
+        let total = len_digits + suffix.len();
+        let s = format!("{total}{suffix}");
+        if s.len() == total {
+            break s;
+        }
+        len_digits += 1;
+    };
+
+    write_header_block(
+        &mut out,
+        &format!("PaxHeaders/{path}"),
+        record.len() as u64,
+        tar::EntryType::XHeader,
+    );
+    out.extend_from_slice(record.as_bytes());
+    pad_to_block(&mut out);
+
+    // Deliberately disagree with PAX size=10.
+    write_header_block(&mut out, path, 5, tar::EntryType::Regular);
+    out.extend_from_slice(content);
+    pad_to_block(&mut out);
+    out.extend_from_slice(&[0u8; 1024]);
+    out
+}
+
 #[test]
 fn pax_encoded_sparse_entry_is_downgraded_to_other() {
     // PAX-encoded GNU sparse (format 1.0) uses a regular-file entry type whose
@@ -517,6 +608,105 @@ fn pax_encoded_sparse_entry_is_downgraded_to_other() {
         member.content_md5.is_none(),
         "Other entries must not carry a content_md5 — the on-disk blob is not the file"
     );
+}
+
+#[test]
+fn pax_mtime_mode_and_xattrs_are_captured_in_toc() {
+    let raw = pax_prefixed_file_tar(
+        "meta.txt",
+        &[
+            ("mtime", "1715000000.123456789"),
+            ("atime", "1715000001.5"),
+            ("ctime", "1715000002.25"),
+            ("mode", "33261"), // 0100755
+            ("uname", "builder"),
+            ("gname", "wheel"),
+            ("SCHILY.xattr.user.foo", "bar"),
+        ],
+        b"payload",
+    );
+
+    let toc = decode_toc(&wrap(&raw));
+    let member = toc
+        .members
+        .iter()
+        .find(|m| m.path == "meta.txt")
+        .expect("meta.txt must be present");
+    assert_eq!(member.mtime, 1_715_000_000);
+    assert_eq!(member.mtime_ns, Some(123_456_789));
+    assert_eq!(member.atime, Some(1_715_000_001));
+    assert_eq!(member.atime_ns, Some(500_000_000));
+    assert_eq!(member.ctime, Some(1_715_000_002));
+    assert_eq!(member.ctime_ns, Some(250_000_000));
+    assert_eq!(member.mode, 33_261);
+    assert_eq!(member.uname.as_deref(), Some("builder"));
+    assert_eq!(member.gname.as_deref(), Some("wheel"));
+    let xattrs = member.xattrs.as_ref().expect("xattrs must be present");
+    assert_eq!(xattrs.get("user.foo").cloned(), Some(b"bar".to_vec()));
+}
+
+#[test]
+fn pax_global_header_is_not_indexed_as_member() {
+    let raw = pax_global_header_tar("real.txt", b"hello");
+    let wrapped = wrap(&raw);
+    let decoded = zstd::stream::decode_all(Cursor::new(&wrapped)).unwrap();
+    assert_eq!(decoded, raw, "global PAX bytes must still round-trip");
+
+    let toc = decode_toc(&wrapped);
+    assert!(
+        !toc.members.iter().any(|m| m.path == "pax_global_header"),
+        "global PAX pseudo-member must not be indexed"
+    );
+    assert!(toc.members.iter().any(|m| m.path == "real.txt"));
+}
+
+#[test]
+fn conflicting_pax_size_and_header_size_is_rejected() {
+    let raw = pax_size_mismatch_tar("bad.bin");
+    let mut wrapped = Vec::new();
+    let err = tarzan::wrap(
+        Cursor::new(&raw),
+        &mut wrapped,
+        tarzan::WrapOptions::default(),
+    )
+    .expect_err("size disagreement must be rejected");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("disagrees") || msg.contains("PAX size"),
+        "unexpected error: {msg}"
+    );
+}
+
+#[test]
+fn uncommon_type_records_raw_type_byte() {
+    let mut raw = Vec::new();
+    write_header_block(&mut raw, "volhdr", 0, tar::EntryType::new(b'V'));
+    raw.extend_from_slice(&[0u8; 1024]);
+
+    let toc = decode_toc(&wrap(&raw));
+    let member = toc
+        .members
+        .iter()
+        .find(|m| m.path == "volhdr")
+        .expect("member must be indexed");
+    assert_eq!(member.entry_type, tarzan::format::toc::EntryType::Other);
+    assert_eq!(member.raw_type_byte, Some(b'V'));
+}
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_path_is_preserved_in_path_bytes() {
+    let path = b"bad-\xff-name";
+    let mut raw = Vec::new();
+    write_header_block_raw_path(&mut raw, path, 1, tar::EntryType::Regular);
+    raw.extend_from_slice(b"x");
+    pad_to_block(&mut raw);
+    raw.extend_from_slice(&[0u8; 1024]);
+
+    let toc = decode_toc(&wrap(&raw));
+    let member = toc.members.first().expect("one member expected");
+    assert_eq!(member.path_bytes.as_deref(), Some(&path[..]));
+    assert!(member.path.contains('\u{fffd}'));
 }
 
 #[test]

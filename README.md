@@ -227,7 +227,16 @@ the display differs.
 
 `--json` emits the TOC as a pretty-printed JSON array. Each entry
 carries path, type, size, mode, uid, gid, mtime, optional link target,
-content SHA-256 (for regular files), and chunk offsets:
+content SHA-256 (for regular files), and chunk offsets. Some entries
+also carry optional additive metadata (still TOC version 2):
+
+- `mtime_ns`, `atime`, `atime_ns`, `ctime`, `ctime_ns`
+- `uname`, `gname`
+- `xattrs` (from PAX `SCHILY.xattr.*` / `LIBARCHIVE.xattr.*`)
+- `path_bytes`, `link_target_bytes` (for non-UTF-8 names)
+- `raw_type_byte` (for entries reported as `type: "other"`)
+
+Example:
 
 ```json
 [
@@ -316,7 +325,8 @@ tarzan extract -f archive.tar.zst --skip-bad-chunks
 ```
 
 Restored on extract: file contents, directory hierarchy, Unix permission
-bits, symlinks (Unix only), hard links, and mtime on files, symlinks, and
+bits, symlinks (Unix only), hard links, xattrs from PAX records (Unix only),
+and mtime on files, symlinks, and
 directories. Directory mtimes are applied in a deferred pass after all
 children are written, so creating a child doesn't bump the parent's
 timestamp back; hard links are likewise reconstructed in a second pass
@@ -326,7 +336,7 @@ not its target — the link is skipped with a warning. `--no-mtime` skips
 timestamp restoration entirely. Character/block devices and FIFOs are
 still skipped with a warning.
 
-For workflows that need full fidelity — device files, FIFOs, xattrs/ACLs,
+For workflows that need full fidelity — device files, FIFOs, ACLs,
 sparse files — fall back to standard tooling. Every tarzan archive is a
 valid zstd stream:
 

@@ -11,11 +11,24 @@ pub fn run(archive: &Path, verbose: bool, json: bool, utc: bool, paths: &[String
     let reader = TarzanReader::open(archive)?;
     let filter = PathFilter::new(paths)?;
 
+    let lossy_count = reader
+        .members()
+        .iter()
+        .filter(|m| m.path_bytes.is_some() || m.link_target_bytes.is_some())
+        .count();
+
     let members: Vec<&TocMember> = reader
         .members()
         .iter()
         .filter(|m| filter.matches(&m.path))
         .collect();
+
+    if lossy_count > 0 {
+        eprintln!(
+            "tarzan: warning: {} contains {lossy_count} entries with non-UTF-8 path/link bytes; displayed names are lossy",
+            archive.display()
+        );
+    }
 
     if json {
         let out = serde_json::to_string_pretty(&members)?;

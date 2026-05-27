@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
 use std::rc::Rc;
 
@@ -171,8 +172,12 @@ where
     // Absolute tar offset where the next not-yet-emitted frame begins; kept
     // equal to the window's base.
     let mut next_chunk_start: u64 = 0;
-    // Absolute tar offset where the most recently parsed member's region ends.
-    let mut prev_entry_end: u64 = 0;
+    // Absolute tar offset where the most recently indexed member's region ends.
+    // Non-indexed entries (e.g. PAX global headers) are folded into the next
+    // indexed member's region so extraction offsets remain consistent.
+    let mut prev_indexed_entry_end: u64 = 0;
+    // Absolute tar offset where the most recently parsed tar entry ends.
+    let mut last_entry_end: u64 = 0;
     let mut pending: Option<Pending> = None;
     let mut scratch = vec![0u8; 64 * 1024];
 
@@ -219,7 +224,29 @@ where
                 None => {}
             }
 
-            let member = read_member_metadata(&mut entry)?;
+            let metadata = read_member_metadata(&mut entry)?;
+            // PAX local/global extension headers can override entry size. If
+            // both PAX size and in-header size are present (non-zero) on a
+            // non-sparse entry, they must agree; disagreement is hostile.
+            if matches!(
+                entry.header().entry_type(),
+                tar::EntryType::Regular | tar::EntryType::Continuous
+            ) && !metadata.is_sparse
+                && let Some(pax_size) = metadata.pax_size
+            {
+                let header_size = entry
+                    .header()
+                    .entry_size()
+                    .context("failed to read in-header entry size")?;
+                if header_size != 0 && header_size != pax_size {
+                    bail!(
+                        "refusing to wrap {}: PAX size={} disagrees with in-header size={}",
+                        metadata.member.path,
+                        pax_size,
+                        header_size
+                    );
+                }
+            }
             // For GNU sparse the tar reader consumes the main header *and*
             // any continuation headers before yielding the entry, so the
             // data starts wherever the window currently ends. The on-disk
@@ -227,14 +254,13 @@ where
             // expanded logical size that `entry.size()` reports. For every
             // other entry type the two are identical and the window's end is
             // exactly `header_pos + 512`.
-            let is_sparse = entry.header().entry_type().is_gnu_sparse();
-            let on_disk_size = if is_sparse {
+            let on_disk_size = if metadata.is_sparse {
                 entry
                     .header()
                     .entry_size()
                     .context("failed to read sparse entry on-disk size")?
             } else {
-                member.size
+                metadata.member.size
             };
             let data_start = window.borrow().end();
             let entry_end = data_start
@@ -242,18 +268,28 @@ where
                 .ok_or_else(|| {
                     anyhow::anyhow!(
                         "tar entry {} ending at {data_start}+padded({on_disk_size}) overflows",
-                        member.path
+                        metadata.member.path
                     )
                 })?;
-            let region_size = entry_end.checked_sub(prev_entry_end).ok_or_else(|| {
-                anyhow::anyhow!(
-                    "tar entry {} starts before the previous entry ended",
-                    member.path
-                )
-            })?;
-            prev_entry_end = entry_end;
+            let region_size = entry_end
+                .checked_sub(prev_indexed_entry_end)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "tar entry {} starts before the previous entry ended",
+                        metadata.member.path
+                    )
+                })?;
+            last_entry_end = entry_end;
+
+            // Keep global PAX headers in the compressed byte stream but omit
+            // them from TOC member indexing.
+            if metadata.skip_toc {
+                continue;
+            }
+
+            prev_indexed_entry_end = entry_end;
             let idx = members.len();
-            members.push(member);
+            members.push(metadata.member);
 
             {
                 let w = window.borrow();
@@ -382,7 +418,7 @@ where
         None => {}
     }
 
-    validate_end_of_archive(&window, prev_entry_end, total)?;
+    validate_end_of_archive(&window, last_entry_end, total)?;
 
     flush_group(
         &mut output,
@@ -673,6 +709,26 @@ fn padded_data_size(size: u64) -> Result<u64> {
         .ok_or_else(|| anyhow::anyhow!("tar entry size {size} overflows"))
 }
 
+#[derive(Default)]
+struct PaxData {
+    has_gnu_sparse_keys: bool,
+    pax_size: Option<u64>,
+    mtime: Option<(i64, u32)>,
+    atime: Option<(i64, u32)>,
+    ctime: Option<(i64, u32)>,
+    mode: Option<u32>,
+    uname: Option<String>,
+    gname: Option<String>,
+    xattrs: BTreeMap<String, Vec<u8>>,
+}
+
+struct MemberMetadata {
+    member: TocMember,
+    is_sparse: bool,
+    skip_toc: bool,
+    pax_size: Option<u64>,
+}
+
 /// Reads an entry's metadata into a partial `TocMember` (with no `chunks`).
 ///
 /// A regular-file entry whose merged PAX header carries any `GNU.sparse.*`
@@ -685,21 +741,23 @@ fn padded_data_size(size: u64) -> Result<u64> {
 /// is skipped and tarzan's random-access tools refuse to treat it as a
 /// regular file. The raw tar bytes still round-trip verbatim, so
 /// `zstd -d | tar x` recovers the original file correctly.
-fn read_member_metadata<R: Read>(entry: &mut tar::Entry<'_, R>) -> Result<TocMember> {
+fn read_member_metadata<R: Read>(entry: &mut tar::Entry<'_, R>) -> Result<MemberMetadata> {
+    let pax = read_pax_data(entry)?;
     let header_type = entry.header().entry_type();
-    let is_pax_sparse =
-        matches!(header_type, tar::EntryType::Regular) && has_pax_sparse_keys(entry)?;
+    let is_pax_sparse = matches!(header_type, tar::EntryType::Regular) && pax.has_gnu_sparse_keys;
+    let skip_toc = header_type.is_pax_global_extensions();
     let entry_type = if is_pax_sparse {
         EntryType::Other
     } else {
         to_entry_type(header_type)
     };
     let header = entry.header();
-    let path = entry
-        .path()
-        .context("failed to read entry path")?
-        .to_string_lossy()
-        .into_owned();
+    let path_bytes_full = entry.path_bytes();
+    let path_bytes = path_bytes_full.as_ref();
+    let path = String::from_utf8_lossy(path_bytes).into_owned();
+    let path_bytes = std::str::from_utf8(path_bytes)
+        .is_err()
+        .then(|| path_bytes.to_vec());
     // `entry.size()` honours PAX `size=` overrides, which the ustar octal
     // size field cannot encode beyond 8 GB; `header.size()` would return the
     // (typically zero) in-header value and misroute the giant member into
@@ -712,31 +770,74 @@ fn read_member_metadata<R: Read>(entry: &mut tar::Entry<'_, R>) -> Result<TocMem
     // the wrap loop. We still record the logical size here so listings and
     // extraction tooling show what users expect.
     let size = entry.size();
-    let mode = header.mode().context("failed to read entry mode")?;
+    let mut mode = header.mode().context("failed to read entry mode")?;
+    if let Some(pax_mode) = pax.mode {
+        mode = pax_mode;
+    }
     let uid = header.uid().context("failed to read entry uid")?;
     let gid = header.gid().context("failed to read entry gid")?;
-    let mtime = header.mtime().context("failed to read entry mtime")? as i64;
+    let mut mtime = header.mtime().context("failed to read entry mtime")? as i64;
+    let mut mtime_ns = None;
+    if let Some((sec, nsec)) = pax.mtime {
+        mtime = sec;
+        mtime_ns = Some(nsec);
+    }
     let tar_offset = entry.raw_header_position();
-    let link_target = entry
-        .link_name()
-        .context("failed to read entry link name")?
-        .map(|p| p.to_string_lossy().into_owned());
+    let (link_target, link_target_bytes) = match entry.link_name_bytes().map(|c| c.into_owned()) {
+        None => (None, None),
+        Some(bytes) => {
+            let display = String::from_utf8_lossy(&bytes).into_owned();
+            let raw = std::str::from_utf8(&bytes).is_err().then_some(bytes);
+            (Some(display), raw)
+        }
+    };
 
-    Ok(TocMember {
+    let pax_size = pax.pax_size;
+    let atime = pax.atime;
+    let ctime = pax.ctime;
+    let uname = pax.uname.clone();
+    let gname = pax.gname.clone();
+    let xattrs = (!pax.xattrs.is_empty()).then_some(pax.xattrs.clone());
+    let raw_type_byte = (entry_type == EntryType::Other).then(|| header.as_bytes()[156]);
+
+    let mut member = TocMember {
         path,
+        path_bytes,
         entry_type,
+        raw_type_byte,
         size,
         mode,
         uid,
         gid,
         mtime,
+        mtime_ns,
+        atime: atime.map(|(sec, _)| sec),
+        atime_ns: atime.map(|(_, nsec)| nsec),
+        ctime: ctime.map(|(sec, _)| sec),
+        ctime_ns: ctime.map(|(_, nsec)| nsec),
+        uname,
+        gname,
+        xattrs,
         tar_offset,
         link_target,
+        link_target_bytes,
         // Filled in later: from the window during small-member grouping,
         // from a streaming hasher in the large-member read loop.
         content_sha256: None,
         content_md5: None,
         chunks: Vec::new(),
+    };
+    if skip_toc {
+        // A global PAX header is metadata, not a file-like member.
+        member.content_sha256 = None;
+        member.content_md5 = None;
+    }
+
+    Ok(MemberMetadata {
+        member,
+        is_sparse: entry.header().entry_type().is_gnu_sparse(),
+        skip_toc,
+        pax_size,
     })
 }
 
@@ -755,20 +856,134 @@ fn finalize_sha256_hex(hasher: Sha256) -> String {
 
 /// Returns true if any of the entry's merged PAX keys begin with `GNU.sparse.`,
 /// indicating a PAX-encoded sparse file (formats 0.0, 0.1, 1.0).
-fn has_pax_sparse_keys<R: Read>(entry: &mut tar::Entry<'_, R>) -> Result<bool> {
+fn read_pax_data<R: Read>(entry: &mut tar::Entry<'_, R>) -> Result<PaxData> {
+    let mut data = PaxData::default();
     let Some(exts) = entry
         .pax_extensions()
         .context("failed to read entry PAX extensions")?
     else {
-        return Ok(false);
+        return Ok(data);
     };
     for ext in exts {
         let ext = ext.context("malformed PAX extension")?;
-        if ext.key_bytes().starts_with(b"GNU.sparse.") {
-            return Ok(true);
+        let key = ext.key_bytes();
+        let value_bytes = ext.value_bytes();
+        if key.starts_with(b"GNU.sparse.") {
+            data.has_gnu_sparse_keys = true;
+        }
+
+        match key {
+            b"size" => {
+                if let Ok(s) = std::str::from_utf8(value_bytes)
+                    && let Ok(n) = s.trim().parse::<u64>()
+                {
+                    data.pax_size = Some(n);
+                }
+            }
+            b"mtime" => {
+                if let Ok(s) = std::str::from_utf8(value_bytes)
+                    && let Some(ts) = parse_pax_timestamp(s)
+                {
+                    data.mtime = Some(ts);
+                }
+            }
+            b"atime" => {
+                if let Ok(s) = std::str::from_utf8(value_bytes)
+                    && let Some(ts) = parse_pax_timestamp(s)
+                {
+                    data.atime = Some(ts);
+                }
+            }
+            b"ctime" => {
+                if let Ok(s) = std::str::from_utf8(value_bytes)
+                    && let Some(ts) = parse_pax_timestamp(s)
+                {
+                    data.ctime = Some(ts);
+                }
+            }
+            b"mode" => {
+                if let Ok(s) = std::str::from_utf8(value_bytes)
+                    && let Ok(mode) = s.parse::<u32>()
+                {
+                    data.mode = Some(mode);
+                }
+            }
+            b"uname" => {
+                if let Ok(s) = std::str::from_utf8(value_bytes) {
+                    data.uname = Some(s.to_owned());
+                }
+            }
+            b"gname" => {
+                if let Ok(s) = std::str::from_utf8(value_bytes) {
+                    data.gname = Some(s.to_owned());
+                }
+            }
+            _ => {
+                if let Some(suffix) = key.strip_prefix(b"SCHILY.xattr.") {
+                    data.xattrs.insert(
+                        String::from_utf8_lossy(suffix).into_owned(),
+                        value_bytes.to_vec(),
+                    );
+                } else if let Some(suffix) = key.strip_prefix(b"LIBARCHIVE.xattr.") {
+                    data.xattrs.insert(
+                        String::from_utf8_lossy(suffix).into_owned(),
+                        value_bytes.to_vec(),
+                    );
+                }
+            }
         }
     }
-    Ok(false)
+    Ok(data)
+}
+
+fn parse_pax_timestamp(raw: &str) -> Option<(i64, u32)> {
+    let s = raw.trim();
+    if s.is_empty() {
+        return None;
+    }
+
+    let (negative, body) = if let Some(rest) = s.strip_prefix('-') {
+        (true, rest)
+    } else if let Some(rest) = s.strip_prefix('+') {
+        (false, rest)
+    } else {
+        (false, s)
+    };
+
+    let (whole_str, frac_str) = match body.split_once('.') {
+        Some((w, f)) => (w, f),
+        None => (body, ""),
+    };
+
+    let whole: i64 = if whole_str.is_empty() {
+        0
+    } else {
+        whole_str.parse().ok()?
+    };
+
+    if !frac_str.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let mut ns = 0u32;
+    for (i, b) in frac_str.bytes().enumerate() {
+        if i >= 9 {
+            break;
+        }
+        ns = ns.checked_mul(10)?.checked_add((b - b'0') as u32)?;
+    }
+    for _ in frac_str.len().min(9)..9 {
+        ns = ns.checked_mul(10)?;
+    }
+
+    if !negative {
+        return Some((whole, ns));
+    }
+
+    if ns == 0 {
+        Some((whole.checked_neg()?, 0))
+    } else {
+        Some((whole.checked_neg()?.checked_sub(1)?, 1_000_000_000 - ns))
+    }
 }
 
 fn to_entry_type(t: tar::EntryType) -> EntryType {

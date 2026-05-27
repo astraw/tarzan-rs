@@ -119,6 +119,11 @@
 //! }
 //! ```
 //!
+//! Writers keep `tarzan_version` at 2. New metadata is additive and optional:
+//! fields such as `mtime_ns`, `atime`/`atime_ns`, `ctime`/`ctime_ns`,
+//! `uname`, `gname`, `xattrs`, `path_bytes`, `link_target_bytes`, and
+//! `raw_type_byte` may appear when present in the source tar metadata.
+//!
 //! Each chunk locates one member's bytes inside a compressed frame.  A member
 //! larger than the chunk size spans several chunks; small members are packed
 //! together to share a frame, and the optional `frame_offset` field (omitted

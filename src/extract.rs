@@ -51,8 +51,8 @@ impl Default for ExtractOptions {
 /// (their target file must be extracted first).
 #[derive(Default)]
 struct Deferred {
-    /// (directory path, mtime to apply)
-    dir_times: Vec<(PathBuf, FileTime)>,
+    /// (directory path, atime to apply, mtime to apply)
+    dir_times: Vec<(PathBuf, FileTime, FileTime)>,
     /// (member path for diagnostics, link source, link target)
     hard_links: Vec<(String, PathBuf, PathBuf)>,
 }
@@ -97,7 +97,7 @@ impl TarzanReader {
             if member_excluded(&member.path, &excludes) {
                 continue;
             }
-            let rel = match normalize_member_path(&member.path, opts.strip_components)? {
+            let rel = match member_relative_path(member, opts.strip_components)? {
                 Some(p) if !p.as_os_str().is_empty() => p,
                 _ => continue,
             };
@@ -135,9 +135,9 @@ impl TarzanReader {
 
         // Directory mtimes last: writing children (files, subdirs, hard
         // links) bumps the parent's mtime back to "now".
-        for (path, mtime) in deferred.dir_times {
-            filetime::set_file_mtime(&path, mtime)
-                .with_context(|| format!("setting mtime on directory {}", path.display()))?;
+        for (path, atime, mtime) in deferred.dir_times {
+            filetime::set_file_times(&path, atime, mtime)
+                .with_context(|| format!("setting file times on directory {}", path.display()))?;
         }
 
         Ok(())
@@ -154,14 +154,18 @@ impl TarzanReader {
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         }
-        let mtime = FileTime::from_unix_time(member.mtime, 0);
+        let mtime = member_mtime(member);
+        let atime = member_atime(member, mtime);
         match member.entry_type {
             EntryType::Dir => {
                 fs::create_dir_all(target)
                     .with_context(|| format!("creating dir {}", target.display()))?;
                 set_unix_mode(target, member.mode)?;
+                apply_member_xattrs(target, member)?;
                 if opts.restore_mtime {
-                    deferred.dir_times.push((target.to_path_buf(), mtime));
+                    deferred
+                        .dir_times
+                        .push((target.to_path_buf(), atime, mtime));
                 }
             }
             EntryType::File => {
@@ -172,9 +176,10 @@ impl TarzanReader {
                     Ok(()) => {
                         writer.flush()?;
                         set_unix_mode(target, member.mode)?;
+                        apply_member_xattrs(target, member)?;
                         if opts.restore_mtime {
-                            filetime::set_file_mtime(target, mtime).with_context(|| {
-                                format!("setting mtime on {}", target.display())
+                            filetime::set_file_times(target, atime, mtime).with_context(|| {
+                                format!("setting file times on {}", target.display())
                             })?;
                         }
                     }
@@ -193,16 +198,9 @@ impl TarzanReader {
                 }
             }
             EntryType::Symlink => {
-                let link_target = member
-                    .link_target
-                    .as_deref()
-                    .ok_or_else(|| anyhow!("symlink {} has no link_target", member.path))?;
-                create_symlink(link_target, target)?;
+                create_member_symlink(member, target)?;
                 if opts.restore_mtime {
-                    // Use mtime for both atime and mtime; the TOC doesn't
-                    // record atime separately, and most filesystems don't
-                    // accurately preserve it anyway.
-                    filetime::set_symlink_file_times(target, mtime, mtime).with_context(|| {
+                    filetime::set_symlink_file_times(target, atime, mtime).with_context(|| {
                         format!("setting mtime on symlink {}", target.display())
                     })?;
                 }
@@ -212,11 +210,7 @@ impl TarzanReader {
                 // Defer creation until that file has been written; no
                 // mtime fixup — a hard link shares the target's inode,
                 // which already carries the right timestamp.
-                let link_target = member
-                    .link_target
-                    .as_deref()
-                    .ok_or_else(|| anyhow!("hard link {} has no link_target", member.path))?;
-                match normalize_member_path(link_target, opts.strip_components)? {
+                match member_link_target_relative_path(member, opts.strip_components)? {
                     Some(src_rel) if !src_rel.as_os_str().is_empty() => {
                         deferred.hard_links.push((
                             member.path.clone(),
@@ -231,7 +225,17 @@ impl TarzanReader {
                 }
             }
             EntryType::CharDevice | EntryType::BlockDevice | EntryType::Fifo | EntryType::Other => {
-                warn!(path = %member.path, "skipping unsupported entry type");
+                if matches!(member.entry_type, EntryType::Other)
+                    && let Some(raw) = member.raw_type_byte
+                {
+                    warn!(
+                        path = %member.path,
+                        raw_type = format!("{} (0x{raw:02x})", raw as char),
+                        "skipping unsupported entry type"
+                    );
+                } else {
+                    warn!(path = %member.path, "skipping unsupported entry type");
+                }
             }
         }
         Ok(())
@@ -255,6 +259,53 @@ fn member_excluded(path: &str, compiled: &[Pattern]) -> bool {
     compiled.iter().any(|g| g.matches(p))
 }
 
+fn member_relative_path(member: &TocMember, strip: usize) -> Result<Option<PathBuf>> {
+    #[cfg(unix)]
+    if let Some(raw) = &member.path_bytes {
+        return normalize_member_path_bytes(raw, strip);
+    }
+    normalize_member_path(&member.path, strip)
+}
+
+fn member_link_target_relative_path(member: &TocMember, strip: usize) -> Result<Option<PathBuf>> {
+    #[cfg(unix)]
+    if let Some(raw) = &member.link_target_bytes {
+        return normalize_member_path_bytes(raw, strip);
+    }
+    let link_target = member
+        .link_target
+        .as_deref()
+        .ok_or_else(|| anyhow!("hard link {} has no link_target", member.path))?;
+    normalize_member_path(link_target, strip)
+}
+
+fn member_mtime(member: &TocMember) -> FileTime {
+    FileTime::from_unix_time(member.mtime, member.mtime_ns.unwrap_or(0))
+}
+
+fn member_atime(member: &TocMember, fallback: FileTime) -> FileTime {
+    match member.atime {
+        Some(sec) => FileTime::from_unix_time(sec, member.atime_ns.unwrap_or(0)),
+        None => fallback,
+    }
+}
+
+#[cfg(unix)]
+fn apply_member_xattrs(target: &Path, member: &TocMember) -> Result<()> {
+    if let Some(xattrs) = &member.xattrs {
+        for (name, value) in xattrs {
+            xattr::set(target, name, value)
+                .with_context(|| format!("setting xattr {name} on {}", target.display()))?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn apply_member_xattrs(_target: &Path, _member: &TocMember) -> Result<()> {
+    Ok(())
+}
+
 fn normalize_member_path(p: &str, strip: usize) -> Result<Option<PathBuf>> {
     if p.starts_with('/') {
         bail!("absolute path in archive (refusing to extract): {p}");
@@ -271,6 +322,33 @@ fn normalize_member_path(p: &str, strip: usize) -> Result<Option<PathBuf>> {
         return Ok(None);
     }
     Ok(Some(parts[strip..].iter().copied().collect()))
+}
+
+#[cfg(unix)]
+fn normalize_member_path_bytes(raw: &[u8], strip: usize) -> Result<Option<PathBuf>> {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    if raw.starts_with(b"/") {
+        bail!("absolute path in archive (refusing to extract)");
+    }
+    let mut parts: Vec<&[u8]> = Vec::new();
+    for part in raw.split(|b| *b == b'/') {
+        match part {
+            b"" | b"." => continue,
+            b".." => bail!("path contains `..` (refusing to extract)"),
+            s => parts.push(s),
+        }
+    }
+    if parts.len() <= strip {
+        return Ok(None);
+    }
+
+    let mut path = PathBuf::new();
+    for part in &parts[strip..] {
+        path.push(OsStr::from_bytes(part));
+    }
+    Ok(Some(path))
 }
 
 #[cfg(unix)]
@@ -295,12 +373,38 @@ fn create_symlink(link_target: &str, target: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(unix)]
+fn create_member_symlink(member: &TocMember, target: &Path) -> Result<()> {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    if let Some(raw) = &member.link_target_bytes {
+        std::os::unix::fs::symlink(OsStr::from_bytes(raw), target)
+            .with_context(|| format!("creating symlink {}", target.display()))?;
+        return Ok(());
+    }
+    let link_target = member
+        .link_target
+        .as_deref()
+        .ok_or_else(|| anyhow!("symlink {} has no link_target", member.path))?;
+    create_symlink(link_target, target)
+}
+
 #[cfg(not(unix))]
 fn create_symlink(_link_target: &str, target: &Path) -> Result<()> {
     bail!(
         "symlinks not supported on this platform ({})",
         target.display()
     )
+}
+
+#[cfg(not(unix))]
+fn create_member_symlink(member: &TocMember, target: &Path) -> Result<()> {
+    let link_target = member
+        .link_target
+        .as_deref()
+        .ok_or_else(|| anyhow!("symlink {} has no link_target", member.path))?;
+    create_symlink(link_target, target)
 }
 
 #[cfg(test)]
