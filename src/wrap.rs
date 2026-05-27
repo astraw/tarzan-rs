@@ -220,8 +220,31 @@ where
             }
 
             let member = read_member_metadata(&entry)?;
-            let header_pos = entry.raw_header_position();
-            let entry_end = padded_entry_end(header_pos, member.size)?;
+            // For GNU sparse the tar reader consumes the main header *and*
+            // any continuation headers before yielding the entry, so the
+            // data starts wherever the window currently ends. The on-disk
+            // data length is the raw size field (`entry_size`), not the
+            // expanded logical size that `entry.size()` reports. For every
+            // other entry type the two are identical and the window's end is
+            // exactly `header_pos + 512`.
+            let is_sparse = entry.header().entry_type().is_gnu_sparse();
+            let on_disk_size = if is_sparse {
+                entry
+                    .header()
+                    .entry_size()
+                    .context("failed to read sparse entry on-disk size")?
+            } else {
+                member.size
+            };
+            let data_start = window.borrow().end();
+            let entry_end = data_start
+                .checked_add(padded_data_size(on_disk_size)?)
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "tar entry {} ending at {data_start}+padded({on_disk_size}) overflows",
+                        member.path
+                    )
+                })?;
             let region_size = entry_end.checked_sub(prev_entry_end).ok_or_else(|| {
                 anyhow::anyhow!(
                     "tar entry {} starts before the previous entry ended",
@@ -644,17 +667,10 @@ fn validate_end_of_archive(
     Ok(())
 }
 
-fn padded_entry_end(header_pos: u64, size: u64) -> Result<u64> {
-    let padded_size = size
-        .checked_add(511)
+fn padded_data_size(size: u64) -> Result<u64> {
+    size.checked_add(511)
         .map(|size| size / 512 * 512)
-        .ok_or_else(|| anyhow::anyhow!("tar entry size {size} overflows"))?;
-    header_pos
-        .checked_add(512)
-        .and_then(|pos| pos.checked_add(padded_size))
-        .ok_or_else(|| {
-            anyhow::anyhow!("tar entry ending at {header_pos}+512+{padded_size} overflows")
-        })
+        .ok_or_else(|| anyhow::anyhow!("tar entry size {size} overflows"))
 }
 
 /// Reads an entry's metadata into a partial `TocMember` (with no `chunks`).
@@ -666,13 +682,17 @@ fn read_member_metadata<R: Read>(entry: &tar::Entry<'_, R>) -> Result<TocMember>
         .context("failed to read entry path")?
         .to_string_lossy()
         .into_owned();
-    if header.entry_type().is_gnu_sparse() {
-        bail!("GNU sparse tar entries are not supported by wrap: {path}");
-    }
     // `entry.size()` honours PAX `size=` overrides, which the ustar octal
     // size field cannot encode beyond 8 GB; `header.size()` would return the
     // (typically zero) in-header value and misroute the giant member into
     // the small-member group, leaving its data unflushed in the window.
+    //
+    // For GNU sparse entries `entry.size()` is the *expanded* (logical) size
+    // — what the file looks like after the holes are filled in. The raw
+    // on-disk data length (sum of the sparse extent lengths) is the
+    // `entry_size` field, and is what we use for tar-layout arithmetic in
+    // the wrap loop. We still record the logical size here so listings and
+    // extraction tooling show what users expect.
     let size = entry.size();
     let mode = header.mode().context("failed to read entry mode")?;
     let uid = header.uid().context("failed to read entry uid")?;

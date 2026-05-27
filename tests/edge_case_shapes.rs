@@ -427,8 +427,7 @@ fn gnu_sparse_tar() -> Vec<u8> {
 }
 
 #[test]
-#[should_panic(expected = "GNU sparse tar entries are not supported")]
-fn gnu_sparse_entry_currently_panics_when_unwrapped() {
+fn gnu_sparse_entry_roundtrips_tar_bytes() {
     let raw = gnu_sparse_tar();
     let mut wrapped = Vec::new();
     tarzan::wrap(
@@ -436,7 +435,12 @@ fn gnu_sparse_entry_currently_panics_when_unwrapped() {
         &mut wrapped,
         tarzan::WrapOptions::default(),
     )
-    .unwrap();
+    .expect("wrap must accept GNU sparse entries");
+    let decoded = zstd::stream::decode_all(Cursor::new(&wrapped)).unwrap();
+    assert_eq!(
+        decoded, raw,
+        "decompressed tarzan archive must reproduce the original tar bytes"
+    );
 }
 
 #[test]
