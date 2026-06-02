@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1](https://github.com/astraw/tarzan-rs/compare/v0.4.0...v0.4.1) - 2026-06-02
+
+### Other
+
+- fix three errors in --json field description (claude-sonnet-4-6)
+- mention MD5 sums in README JSON TOC section
+- add badges to readme
+- update dependencies
+
 ## [0.4.0](https://github.com/astraw/tarzan-rs/compare/v0.3.0...v0.4.0) - 2026-05-27
 
 ### Added
