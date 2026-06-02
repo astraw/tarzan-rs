@@ -77,9 +77,9 @@
 //! - **Per data frame** — zstd's built-in XXHash64 content checksum is
 //!   enabled on every chunk, so a corrupted compressed byte fails at
 //!   decompress time with no extra work on the reader's side.
-//! - **Per member** — each regular-file entry's TOC record carries a
-//!   `content_sha256` (SHA-256, same format as `sha256sum`) and a
-//!   `content_md5` (MD5, same format as `md5sum`, for interoperability
+//! - **Per member** — each regular-file entry's TOC record carries an
+//!   optional `content_sha256` (SHA-256, same format as `sha256sum`) and an
+//!   optional `content_md5` (MD5, same format as `md5sum`, for interoperability
 //!   with systems that expose MD5 checksums such as S3 ETags for
 //!   single-PUT uploads). Both cover only the file's content bytes —
 //!   no tar headers, no padding.
@@ -105,8 +105,8 @@
 //!       "gid": 1000,
 //!       "mtime": 1730643742,
 //!       "tar_offset": 1024,
-//!       "content_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-//!       "content_md5": "d41d8cd98f00b204e9800998ecf8427e",
+//!       "content_sha256": "a948904f2f0f479b8f936f2b38bf5e9e2c5a7b5b5e7e3f7b6e5d4c3b2a19080f",
+//!       "content_md5": "1b374e3a9f0c8d7b6e5a4f3c2d1b0a9e",
 //!       "chunks": [
 //!         {
 //!           "compressed_offset": 1024,

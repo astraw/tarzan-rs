@@ -63,7 +63,7 @@ impl TarzanReader {
     /// HTTP range requests.
     ///
     /// Two reads happen up front: the leading identity frame (14 bytes) and the
-    /// trailing footer (62 bytes); the footer carries the TOC offset, so the
+    /// trailing footer (38 bytes); the footer carries the TOC offset, so the
     /// TOC is then fetched with a single seek. Member data is read lazily by
     /// [`extract_member`](Self::extract_member) and the `verify` methods.
     pub fn from_seekable<S: Read + Seek + 'static>(mut source: S) -> Result<Self> {
