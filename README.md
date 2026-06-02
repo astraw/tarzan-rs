@@ -232,7 +232,7 @@ the display differs.
 
 `--json` emits the TOC as a pretty-printed JSON array. Each entry
 carries path, type, size, mode, uid, gid, mtime, optional link target,
-content SHA-256 (for regular files), and chunk offsets. Some entries
+optional SHA-256 and MD5 checksums, and chunk offsets. Some entries
 also carry optional additive metadata (still TOC version 2):
 
 - `mtime_ns`, `atime`, `atime_ns`, `ctime`, `ctime_ns`
