@@ -231,9 +231,10 @@ UTC. The stored `mtime` is a timezone-independent Unix timestamp, so only
 the display differs.
 
 `--json` emits the TOC as a pretty-printed JSON array. Each entry
-carries path, type, size, mode, uid, gid, mtime, optional link target,
-optional SHA-256 and MD5 checksums, and chunk offsets. Some entries
-also carry optional additive metadata (still TOC version 2):
+carries path, type, size, mode, uid, gid, mtime, tar_offset, optional
+link target, optional SHA-256 and MD5 checksums, and chunks. Some
+entries also carry optional additive metadata (all within the v2
+archive schema):
 
 - `mtime_ns`, `atime`, `atime_ns`, `ctime`, `ctime_ns`
 - `uname`, `gname`
@@ -254,8 +255,8 @@ Example:
     "gid": 1000,
     "mtime": 1730643742,
     "tar_offset": 1024,
-    "content_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "content_md5": "d41d8cd98f00b204e9800998ecf8427e",
+    "content_sha256": "a948904f2f0f479b8f936f2b38bf5e9e2c5a7b5b5e7e3f7b6e5d4c3b2a19080f",
+    "content_md5": "1b374e3a9f0c8d7b6e5a4f3c2d1b0a9e",
     "chunks": [
       {
         "compressed_offset": 1024,
