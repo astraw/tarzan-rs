@@ -1,5 +1,10 @@
 # tarzan 🌿
 
+[![Crates.io](https://img.shields.io/crates/v/tarzan.svg)](https://crates.io/crates/tarzan)
+[![Documentation](https://docs.rs/tarzan/badge.svg)](https://docs.rs/tarzan/)
+[![Crate License](https://img.shields.io/crates/l/tarzan.svg)](https://crates.io/crates/tarzan)
+[![build](https://github.com/astraw/tarzan-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/astraw/tarzan-rs/actions?query=branch%3Amain)
+
 **Tar Archive with Random-access Zstd And iNdex**
 
 `tarzan` is a command-line tool for creating and extracting `.tar.zst` archives that
