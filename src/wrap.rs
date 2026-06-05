@@ -325,7 +325,7 @@ where
                 // streaming SHA-256 of the member's content; chunks get drained
                 // from the window before we could go back and hash from there.
                 let is_file = matches!(members[idx].entry_type, EntryType::File);
-                let mut content_hasher = is_file.then(Sha256::new);
+                let mut sha256_ctx = is_file.then(Sha256::new);
                 let mut md5_ctx = is_file.then(md5::Context::new);
                 let mut data_left = members[idx].size;
                 while data_left > 0 {
@@ -339,8 +339,8 @@ where
                             members[idx].path
                         );
                     }
-                    if let Some(h) = &mut content_hasher {
-                        h.update(&scratch[..n]);
+                    if let Some(ctx) = &mut sha256_ctx {
+                        ctx.update(&scratch[..n]);
                     }
                     if let Some(ctx) = &mut md5_ctx {
                         ctx.consume(&scratch[..n]);
@@ -361,7 +361,7 @@ where
                         next_chunk_start = end;
                     }
                 }
-                if let Some(h) = content_hasher {
+                if let Some(h) = sha256_ctx {
                     members[idx].content_sha256 = Some(finalize_sha256_hex(h));
                 }
                 if let Some(ctx) = md5_ctx {
