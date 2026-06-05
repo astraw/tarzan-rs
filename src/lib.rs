@@ -81,8 +81,9 @@
 //!   optional `content_sha256` (SHA-256, same format as `sha256sum`) and an
 //!   optional `content_md5` (MD5, same format as `md5sum`, for interoperability
 //!   with systems that expose MD5 checksums such as S3 ETags for
-//!   single-PUT uploads). Both cover only the file's content bytes —
-//!   no tar headers, no padding.
+//!   single-PUT uploads). `wrap` computes both by default; each can be
+//!   disabled independently. Both cover only the file's content bytes — no
+//!   tar headers, no padding.
 //! - **Whole archive** — the footer carries an XXHash64 over the entire
 //!   archive prefix. `tarzan verify --quick` re-hashes the file in one
 //!   sequential pass and compares; cheap end-to-end bit-rot detection
@@ -161,15 +162,15 @@
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 //!
-//! [`WrapOptions`] controls chunk size and zstd compression level:
+//! [`WrapOptions`] controls chunk size, zstd compression level, and checksum
+//! emission policy:
 //!
 //! ```no_run
 //! # use std::fs::File;
 //! # use tarzan::WrapOptions;
 //! # let (input, output) = (File::open("a.tar")?, File::create("a.tar.zst")?);
 //! tarzan::wrap(input, output, WrapOptions::default()
-//!     .chunk_size(1024 * 1024)  // 1 MB chunks
-//!     .level(9))?;
+//!     .level(9))?;  // zstd compression level
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 //!

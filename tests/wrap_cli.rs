@@ -3,6 +3,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use serde_json::Value;
 use tempfile::tempdir;
 
 fn fixture_root() -> PathBuf {
@@ -162,4 +163,60 @@ fn wrap_rejects_same_input_and_output_path() {
         original,
         "same-path rejection must not modify the input file"
     );
+}
+
+#[test]
+fn wrap_can_disable_sha256_and_md5() {
+    let temp = tempdir().expect("failed to create tempdir");
+    let tar_path = temp.path().join("input.tar");
+    let out_path = temp.path().join("output.tar.zst");
+    create_tar_from_fixture(&tar_path);
+
+    let status = Command::new(tarzan_bin())
+        .arg("wrap")
+        .arg("--disable-sha256")
+        .arg("--disable-md5")
+        .arg(&tar_path)
+        .arg("-f")
+        .arg(&out_path)
+        .status()
+        .expect("failed to run tarzan wrap with disabled checksums");
+    assert!(status.success(), "tarzan wrap exited with non-zero status");
+
+    let output = Command::new(tarzan_bin())
+        .arg("list")
+        .arg("--json")
+        .arg("-f")
+        .arg(&out_path)
+        .output()
+        .expect("failed to run tarzan list --json");
+    assert!(
+        output.status.success(),
+        "tarzan list --json failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let members: Value = serde_json::from_slice(&output.stdout).expect("invalid JSON output");
+    let members = members
+        .as_array()
+        .expect("list --json should return an array");
+    let mut saw_file = false;
+    for member in members {
+        if member
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|entry_type| entry_type == "file")
+        {
+            saw_file = true;
+            assert!(
+                member.get("content_sha256").is_none(),
+                "content_sha256 should be omitted when disabled"
+            );
+            assert!(
+                member.get("content_md5").is_none(),
+                "content_md5 should be omitted when disabled"
+            );
+        }
+    }
+    assert!(saw_file, "fixture should contain at least one regular file");
 }

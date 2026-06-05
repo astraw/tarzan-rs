@@ -6,21 +6,38 @@ use anyhow::{Context, Result, bail};
 use tarzan::format::toc::TocMember;
 use tracing::info;
 
-pub fn run(
-    input: Option<&Path>,
-    output: Option<&Path>,
-    chunk_size: usize,
-    level: i32,
-    verbose: bool,
-    sync: bool,
-) -> Result<()> {
+pub struct RunOptions<'a> {
+    pub input: Option<&'a Path>,
+    pub output: Option<&'a Path>,
+    pub chunk_size: usize,
+    pub level: i32,
+    pub disable_sha256: bool,
+    pub disable_md5: bool,
+    pub verbose: bool,
+    pub sync: bool,
+}
+
+pub fn run(opts: RunOptions<'_>) -> Result<()> {
+    let RunOptions {
+        input,
+        output,
+        chunk_size,
+        level,
+        disable_sha256,
+        disable_md5,
+        verbose,
+        sync,
+    } = opts;
+
     if output.is_none() && io::stdout().is_terminal() {
         bail!("refusing to write binary archive to terminal; use `-f FILE` or redirect stdout");
     }
 
     let opts = tarzan::WrapOptions::default()
         .chunk_size(chunk_size)
-        .level(level);
+        .level(level)
+        .compute_sha256(!disable_sha256)
+        .compute_md5(!disable_md5);
 
     // tar's -v lists each member as it is processed. wrap streams the input,
     // so members are reported as soon as they finish compressing.

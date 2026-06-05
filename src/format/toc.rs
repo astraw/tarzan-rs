@@ -57,9 +57,9 @@ pub struct TocMember {
     /// output, so users can verify against on-disk files without invoking
     /// tarzan.
     ///
-    /// **Writers must populate this field for every regular file.** It is
-    /// `None` only for non-file entries (directories, symlinks, hard links,
-    /// device nodes) where content does not exist.
+    /// This field is optional per entry: a writer may populate it for all
+    /// regular files, for none, or selectively. `tarzan wrap` computes it by
+    /// default and can skip it via `--disable-sha256`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_sha256: Option<String>,
     /// MD5 of the member's file content (no headers, no padding), as
@@ -68,8 +68,9 @@ pub struct TocMember {
     /// cryptographic integrity use `content_sha256`.
     ///
     /// This field is optional per entry: a writer may populate it for all
-    /// regular files, for none, or selectively. Readers must not assume it is
-    /// present even if other entries in the same archive carry it.
+    /// regular files, for none, or selectively. `tarzan wrap` computes it by
+    /// default and can skip it via `--disable-md5`. Readers must not assume it
+    /// is present even if other entries in the same archive carry it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_md5: Option<String>,
     pub chunks: Vec<ChunkInfo>,

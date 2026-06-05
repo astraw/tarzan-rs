@@ -47,7 +47,7 @@ pub fn run(archive: &Path, target_path: Option<&str>, quick: bool, verbose: bool
 
     if !any_checksum {
         eprintln!(
-            "warning: no checksums found in archive (archive may have been created without SHA-256 support)"
+            "warning: no SHA-256 checksums found in archive (archive may have been created with --disable-sha256)"
         );
     }
 

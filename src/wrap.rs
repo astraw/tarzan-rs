@@ -16,8 +16,14 @@ use crate::io::{CountingWriter, HashingWriter};
 
 #[derive(Debug, Clone)]
 pub struct WrapOptions {
+    /// Uncompressed tar bytes targeted per independently-decodable data frame.
     pub chunk_size: usize,
+    /// zstd compression level used for data and TOC frames.
     pub level: i32,
+    /// Whether to emit per-file `content_sha256` in the TOC.
+    pub compute_sha256: bool,
+    /// Whether to emit per-file `content_md5` in the TOC.
+    pub compute_md5: bool,
 }
 
 impl Default for WrapOptions {
@@ -25,6 +31,8 @@ impl Default for WrapOptions {
         Self {
             chunk_size: 4 * 1024 * 1024,
             level: 3,
+            compute_sha256: true,
+            compute_md5: true,
         }
     }
 }
@@ -37,6 +45,16 @@ impl WrapOptions {
 
     pub fn level(mut self, level: i32) -> Self {
         self.level = level;
+        self
+    }
+
+    pub fn compute_sha256(mut self, compute_sha256: bool) -> Self {
+        self.compute_sha256 = compute_sha256;
+        self
+    }
+
+    pub fn compute_md5(mut self, compute_md5: bool) -> Self {
+        self.compute_md5 = compute_md5;
         self
     }
 }
@@ -144,6 +162,8 @@ where
     }
     let chunk_size = opts.chunk_size as u64;
     let level = opts.level;
+    let compute_sha256 = opts.compute_sha256;
+    let compute_md5 = opts.compute_md5;
 
     let window = Rc::new(RefCell::new(Window {
         buf: Vec::new(),
@@ -202,6 +222,8 @@ where
                         &mut next_chunk_start,
                         &mut on_member,
                         chunk_size,
+                        compute_sha256,
+                        compute_md5,
                         idx,
                         region_size,
                     )?;
@@ -321,12 +343,13 @@ where
                 // Pull the data through the window ourselves, emitting a frame
                 // whenever a full chunk_size has accumulated. Letting the tar
                 // reader skip the data instead would buffer the whole member.
-                // For regular files we also fold each scratch read into a
-                // streaming SHA-256 of the member's content; chunks get drained
-                // from the window before we could go back and hash from there.
+                // For regular files we also fold each scratch read into
+                // streaming checksum contexts of the member's content; chunks
+                // get drained from the window before we could go back and hash
+                // from there.
                 let is_file = matches!(members[idx].entry_type, EntryType::File);
-                let mut sha256_ctx = is_file.then(Sha256::new);
-                let mut md5_ctx = is_file.then(md5::Context::new);
+                let mut sha256_ctx = (is_file && compute_sha256).then(Sha256::new);
+                let mut md5_ctx = (is_file && compute_md5).then(md5::Context::new);
                 let mut data_left = members[idx].size;
                 while data_left > 0 {
                     let want = data_left.min(scratch.len() as u64) as usize;
@@ -396,6 +419,8 @@ where
                 &mut next_chunk_start,
                 &mut on_member,
                 chunk_size,
+                compute_sha256,
+                compute_md5,
                 idx,
                 region_size,
             )?;
@@ -488,6 +513,8 @@ fn add_to_group<W, F>(
     next_chunk_start: &mut u64,
     on_member: &mut F,
     chunk_size: u64,
+    compute_sha256: bool,
+    compute_md5: bool,
     idx: usize,
     region_size: u64,
 ) -> Result<()>
@@ -508,8 +535,12 @@ where
             })?;
         let w = window.borrow();
         let content = w.try_slice(content_start, content_end)?;
-        members[idx].content_sha256 = Some(sha256_hex(content));
-        members[idx].content_md5 = Some(format!("{:x}", md5::compute(content)));
+        if compute_sha256 {
+            members[idx].content_sha256 = Some(sha256_hex(content));
+        }
+        if compute_md5 {
+            members[idx].content_md5 = Some(format!("{:x}", md5::compute(content)));
+        }
     }
 
     let would_exceed_chunk = match group_size.checked_add(region_size) {

@@ -67,9 +67,11 @@ single operation regardless of archive size — no scanning. The hash gives
 `tarzan verify --quick` a way to validate the whole archive in one sequential
 read, without decompressing anything. Per-file integrity is layered on top: every
 data frame carries zstd's own XXHash64 content checksum (caught at decompress
-time), and every regular-file TOC entry records a `content_sha256` (in the same
-format `sha256sum` produces) and a `content_md5` — so you can compare against an
-on-disk copy or an S3 ETag (for single-PUT uploads) without running tarzan.
+time), and by default every regular-file TOC entry records a `content_sha256`
+(in the same format `sha256sum` produces) and a `content_md5` — so you can
+compare against an on-disk copy or an S3 ETag (for single-PUT uploads)
+without running tarzan. If needed for throughput-sensitive wraps, each can be
+disabled independently (`--disable-sha256`, `--disable-md5`).
 
 The result is an archive where:
 - The original tar data is stored bit-for-bit intact inside the compressed stream
@@ -139,6 +141,9 @@ tar -cf - ./dir | tarzan wrap --chunk-size 1M -f archive.tar.zst
 # Set zstd compression level (default: 3)
 tar -cf - ./dir | tarzan wrap --level 9 -f archive.tar.zst
 
+# Skip per-file SHA-256 generation in the TOC
+tar -cf - ./dir | tarzan wrap --disable-sha256 -f archive.tar.zst
+
 # git archive integration
 git archive HEAD | tarzan wrap -f release.tar.zst
 
@@ -152,6 +157,9 @@ tar -cf - ./dir | tarzan wrap -v -f archive.tar.zst
 For safety, `wrap` refuses to write the binary archive directly to a
 terminal: if `-f` is omitted and stdout is a TTY, it errors out. Pipe
 the output, redirect to a file, or pass `-f`.
+
+By default `wrap` computes both `content_sha256` and `content_md5` for regular
+files. Use `--disable-sha256` and/or `--disable-md5` to skip one or both.
 
 ### Creating archives from files
 
@@ -271,9 +279,11 @@ Example:
 `content_sha256` is the SHA-256 of the file's bytes — no tar header, no
 padding — in the same format `sha256sum` prints. `content_md5` is the MD5
 of the same bytes, provided for interoperability with systems that expose
-MD5 checksums (e.g. S3 ETags for single-PUT uploads). Note that S3 ETags
-for multipart uploads are not the plain MD5 of the object and will not
-match this field. For cryptographic integrity, use `content_sha256`.
+MD5 checksums (e.g. S3 ETags for single-PUT uploads). `wrap` computes both
+by default; either field may be omitted if wrapping used
+`--disable-sha256` and/or `--disable-md5`. Note that S3 ETags for multipart
+uploads are not the plain MD5 of the object and will not match this field.
+For cryptographic integrity, use `content_sha256`.
 
 To check whether your local copy of an archived file matches what was
 recorded at wrap time:
@@ -440,6 +450,10 @@ time. zstd's per-frame XXHash64 checksum is verified automatically along
 the way. With `--quick`, the per-file work is skipped entirely; the
 archive is re-hashed once with XXHash64 and compared against the value
 stored in the trailing footer — one sequential read, no decompression.
+
+If an archive was created with `--disable-sha256`, full `verify` reports that
+no SHA-256 checksums are present and exits successfully unless mismatches are
+found for entries that do carry checksums.
 
 ```sh
 # Full per-file verification (decompresses every chunk)

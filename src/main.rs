@@ -51,6 +51,14 @@ enum Commands {
         #[arg(long = "level", default_value_t = 3)]
         level: i32,
 
+        /// Skip computing per-file SHA-256 (`content_sha256`) in the TOC.
+        #[arg(long = "disable-sha256")]
+        disable_sha256: bool,
+
+        /// Skip computing per-file MD5 (`content_md5`) in the TOC.
+        #[arg(long = "disable-md5")]
+        disable_md5: bool,
+
         /// List each member to stderr after wrapping (tar's `-cvf`). Only
         /// effective when output is a file; for stdout/pipes the listing
         /// is suppressed since the archive can't be re-read.
@@ -276,19 +284,23 @@ fn main() -> Result<()> {
             file,
             chunk_size,
             level,
+            disable_sha256,
+            disable_md5,
             verbose,
             sync,
         } => {
             let input = resolve_stream(input);
             let output = resolve_stream(file);
-            cmd_wrap::run(
-                input.as_deref(),
-                output.as_deref(),
+            cmd_wrap::run(cmd_wrap::RunOptions {
+                input: input.as_deref(),
+                output: output.as_deref(),
                 chunk_size,
                 level,
+                disable_sha256,
+                disable_md5,
                 verbose,
                 sync,
-            )
+            })
         }
         Commands::Info { file, json } => cmd_info::run(&file, json),
         Commands::List {
