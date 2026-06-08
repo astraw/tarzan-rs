@@ -14,16 +14,21 @@ use crate::format::{
 };
 use crate::io::{CountingWriter, HashingWriter};
 
+/// Options controlling how an archive is written.
+///
+/// Fields are private; construct with [`WrapOptions::default`] and the builder
+/// methods (e.g. [`WrapOptions::chunk_size`]). Keeping the fields private lets
+/// new options be added in future minor releases without a breaking change.
 #[derive(Debug, Clone)]
 pub struct WrapOptions {
     /// Uncompressed tar bytes targeted per independently-decodable data frame.
-    pub chunk_size: usize,
+    chunk_size: usize,
     /// zstd compression level used for data and TOC frames.
-    pub level: i32,
+    level: i32,
     /// Whether to emit per-file `content_sha256` in the TOC.
-    pub compute_sha256: bool,
+    compute_sha256: bool,
     /// Whether to emit per-file `content_md5` in the TOC.
-    pub compute_md5: bool,
+    compute_md5: bool,
 }
 
 impl Default for WrapOptions {
