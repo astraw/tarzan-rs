@@ -641,6 +641,16 @@ contributors.
 Releases are managed by [release-plz](https://release-plz.dev) and
 [cargo-dist](https://github.com/axodotdev/cargo-dist).
 
+### Checking semver compatibility
+
+When running [`cargo semver-checks`](https://github.com/obi1kenobi/cargo-semver-checks), always pass `--default-features`:
+
+```sh
+cargo semver-checks --default-features
+```
+
+Without it, `cargo semver-checks` may activate mutually-incompatible features (e.g. both `zstd-sys` and `pure-rust`) and fail to compile.
+
 ### How it fits together
 
 - **release-plz** opens a "Release PR" on every push to `main`, bumps
