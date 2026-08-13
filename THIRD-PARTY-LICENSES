@@ -188,14 +188,74 @@ third_party_libraries:
       OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
       IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
       DEALINGS IN THE SOFTWARE.
+- package_name: base64
+  package_version: 0.22.1
+  repository: https://github.com/marshallpierce/rust-base64
+  license: MIT
+  licenses:
+  - license: MIT
+    text: |
+      The MIT License (MIT)
+
+      Copyright (c) 2015 Alice Maz
+
+      Permission is hereby granted, free of charge, to any person obtaining a copy
+      of this software and associated documentation files (the "Software"), to deal
+      in the Software without restriction, including without limitation the rights
+      to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+      copies of the Software, and to permit persons to whom the Software is
+      furnished to do so, subject to the following conditions:
+
+      The above copyright notice and this permission notice shall be included in
+      all copies or substantial portions of the Software.
+
+      THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+      IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+      FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+      AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+      LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+      OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+      THE SOFTWARE.
+- package_name: bitflags
+  package_version: 2.11.1
+  repository: https://github.com/bitflags/bitflags
+  license: MIT
+  licenses:
+  - license: MIT
+    text: |
+      Copyright (c) 2014 The Rust Project Developers
+
+      Permission is hereby granted, free of charge, to any
+      person obtaining a copy of this software and associated
+      documentation files (the "Software"), to deal in the
+      Software without restriction, including without
+      limitation the rights to use, copy, modify, merge,
+      publish, distribute, sublicense, and/or sell copies of
+      the Software, and to permit persons to whom the Software
+      is furnished to do so, subject to the following
+      conditions:
+
+      The above copyright notice and this permission notice
+      shall be included in all copies or substantial portions
+      of the Software.
+
+      THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+      ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+      TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+      PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+      SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+      CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+      OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+      IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+      DEALINGS IN THE SOFTWARE.
 - package_name: block-buffer
-  package_version: 0.10.4
+  package_version: 0.12.0
   repository: https://github.com/RustCrypto/utils
   license: MIT
   licenses:
   - license: MIT
     text: |
-      Copyright (c) 2018-2019 The RustCrypto Project Developers
+      Copyright (c) 2018-2025 The RustCrypto Project Developers
 
       Permission is hereby granted, free of charge, to any
       person obtaining a copy of this software and associated
@@ -382,8 +442,40 @@ third_party_libraries:
       LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
       OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
       SOFTWARE.
+- package_name: const-oid
+  package_version: 0.10.2
+  repository: https://github.com/RustCrypto/formats
+  license: MIT
+  licenses:
+  - license: MIT
+    text: |
+      Copyright (c) 2020-2026 The RustCrypto Project Developers
+
+      Permission is hereby granted, free of charge, to any
+      person obtaining a copy of this software and associated
+      documentation files (the "Software"), to deal in the
+      Software without restriction, including without
+      limitation the rights to use, copy, modify, merge,
+      publish, distribute, sublicense, and/or sell copies of
+      the Software, and to permit persons to whom the Software
+      is furnished to do so, subject to the following
+      conditions:
+
+      The above copyright notice and this permission notice
+      shall be included in all copies or substantial portions
+      of the Software.
+
+      THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+      ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+      TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+      PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+      SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+      CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+      OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+      IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+      DEALINGS IN THE SOFTWARE.
 - package_name: cpufeatures
-  package_version: 0.2.17
+  package_version: 0.3.0
   repository: https://github.com/RustCrypto/utils
   license: MIT
   licenses:
@@ -415,13 +507,13 @@ third_party_libraries:
       IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
       DEALINGS IN THE SOFTWARE.
 - package_name: crypto-common
-  package_version: 0.1.7
+  package_version: 0.2.2
   repository: https://github.com/RustCrypto/traits
   license: MIT
   licenses:
   - license: MIT
     text: |
-      Copyright (c) 2021 RustCrypto Developers
+      Copyright (c) 2021-2026 RustCrypto Developers
 
       Permission is hereby granted, free of charge, to any
       person obtaining a copy of this software and associated
@@ -447,13 +539,46 @@ third_party_libraries:
       IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
       DEALINGS IN THE SOFTWARE.
 - package_name: digest
-  package_version: 0.10.7
+  package_version: 0.11.3
   repository: https://github.com/RustCrypto/traits
   license: MIT
   licenses:
   - license: MIT
     text: |
+      Copyright (c) 2017-2025 RustCrypto Developers
       Copyright (c) 2017 Artyom Pavlov
+
+      Permission is hereby granted, free of charge, to any
+      person obtaining a copy of this software and associated
+      documentation files (the "Software"), to deal in the
+      Software without restriction, including without
+      limitation the rights to use, copy, modify, merge,
+      publish, distribute, sublicense, and/or sell copies of
+      the Software, and to permit persons to whom the Software
+      is furnished to do so, subject to the following
+      conditions:
+
+      The above copyright notice and this permission notice
+      shall be included in all copies or substantial portions
+      of the Software.
+
+      THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+      ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+      TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+      PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+      SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+      CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+      OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+      IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+      DEALINGS IN THE SOFTWARE.
+- package_name: errno
+  package_version: 0.3.14
+  repository: https://github.com/lambda-fairy/rust-errno
+  license: MIT
+  licenses:
+  - license: MIT
+    text: |
+      Copyright (c) 2014 Chris Wong
 
       Permission is hereby granted, free of charge, to any
       person obtaining a copy of this software and associated
@@ -510,13 +635,6 @@ third_party_libraries:
       OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
       IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
       DEALINGS IN THE SOFTWARE.
-- package_name: generic-array
-  package_version: 0.14.7
-  repository: https://github.com/fizyk20/generic-array.git
-  license: MIT
-  licenses:
-  - license: MIT
-    text: "The MIT License (MIT)\r\n\r\nCopyright (c) 2015 Bartłomiej Kamiński\r\n\r\nPermission is hereby granted, free of charge, to any person obtaining a copy\r\nof this software and associated documentation files (the \"Software\"), to deal\r\nin the Software without restriction, including without limitation the rights\r\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\r\ncopies of the Software, and to permit persons to whom the Software is\r\nfurnished to do so, subject to the following conditions:\r\n\r\nThe above copyright notice and this permission notice shall be included in all\r\ncopies or substantial portions of the Software.\r\n\r\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\r\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\r\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\r\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\r\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\r\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\r\nSOFTWARE."
 - package_name: glob
   package_version: 0.3.3
   repository: https://github.com/rust-lang/glob
@@ -557,6 +675,38 @@ third_party_libraries:
   - license: MIT
     text: |
       Copyright (c) 2015 The Rust Project Developers
+
+      Permission is hereby granted, free of charge, to any
+      person obtaining a copy of this software and associated
+      documentation files (the "Software"), to deal in the
+      Software without restriction, including without
+      limitation the rights to use, copy, modify, merge,
+      publish, distribute, sublicense, and/or sell copies of
+      the Software, and to permit persons to whom the Software
+      is furnished to do so, subject to the following
+      conditions:
+
+      The above copyright notice and this permission notice
+      shall be included in all copies or substantial portions
+      of the Software.
+
+      THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+      ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+      TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+      PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+      SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+      CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+      OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+      IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+      DEALINGS IN THE SOFTWARE.
+- package_name: hybrid-array
+  package_version: 0.4.12
+  repository: https://github.com/RustCrypto/hybrid-array
+  license: MIT
+  licenses:
+  - license: MIT
+    text: |
+      Copyright (c) 2022-2026 The RustCrypto Project Developers
 
       Permission is hereby granted, free of charge, to any
       person obtaining a copy of this software and associated
@@ -701,8 +851,38 @@ third_party_libraries:
       OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
       IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
       DEALINGS IN THE SOFTWARE.
+- package_name: linux-raw-sys
+  package_version: 0.12.1
+  repository: https://github.com/sunfishcode/linux-raw-sys
+  license: MIT
+  licenses:
+  - license: MIT
+    text: |
+      Permission is hereby granted, free of charge, to any
+      person obtaining a copy of this software and associated
+      documentation files (the "Software"), to deal in the
+      Software without restriction, including without
+      limitation the rights to use, copy, modify, merge,
+      publish, distribute, sublicense, and/or sell copies of
+      the Software, and to permit persons to whom the Software
+      is furnished to do so, subject to the following
+      conditions:
+
+      The above copyright notice and this permission notice
+      shall be included in all copies or substantial portions
+      of the Software.
+
+      THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+      ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+      TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+      PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+      SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+      CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+      OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+      IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+      DEALINGS IN THE SOFTWARE.
 - package_name: log
-  package_version: 0.4.29
+  package_version: 0.4.30
   repository: https://github.com/rust-lang/log
   license: MIT
   licenses:
@@ -759,8 +939,64 @@ third_party_libraries:
       LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
       OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
       SOFTWARE.
+- package_name: md5
+  package_version: 0.8.0
+  repository: https://github.com/stainless-steel/md5
+  license: MIT
+  licenses:
+  - license: MIT
+    text: |
+      # License
+
+      The project is dual licensed under the terms of the Apache License, Version 2.0,
+      and the MIT License. You may obtain copies of the two licenses at
+
+      * https://www.apache.org/licenses/LICENSE-2.0 and
+      * https://opensource.org/licenses/MIT, respectively.
+
+      The following two notices apply to every file of the project.
+
+      ## The Apache License
+
+      ```
+      Copyright 2015–2025 The md5 Developers
+
+      Licensed under the Apache License, Version 2.0 (the “License”); you may not use
+      this file except in compliance with the License. You may obtain a copy of the
+      License at
+
+          http://www.apache.org/licenses/LICENSE-2.0
+
+      Unless required by applicable law or agreed to in writing, software distributed
+      under the License is distributed on an “AS IS” BASIS, WITHOUT WARRANTIES OR
+      CONDITIONS OF ANY KIND, either express or implied. See the License for the
+      specific language governing permissions and limitations under the License.
+      ```
+
+      ## The MIT License
+
+      ```
+      Copyright 2015–2025 The md5 Developers
+
+      Permission is hereby granted, free of charge, to any person obtaining a copy of
+      this software and associated documentation files (the “Software”), to deal in
+      the Software without restriction, including without limitation the rights to
+      use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of
+      the Software, and to permit persons to whom the Software is furnished to do so,
+      subject to the following conditions:
+
+      The above copyright notice and this permission notice shall be included in all
+      copies or substantial portions of the Software.
+
+      THE SOFTWARE IS PROVIDED “AS IS”, WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+      IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS
+      FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
+      COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+      IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+      CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+      ```
 - package_name: memchr
-  package_version: 2.8.0
+  package_version: 2.8.1
   repository: https://github.com/BurntSushi/memchr
   license: MIT
   licenses:
@@ -1004,6 +1240,36 @@ third_party_libraries:
       OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
       IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
       DEALINGS IN THE SOFTWARE.
+- package_name: rustix
+  package_version: 1.1.4
+  repository: https://github.com/bytecodealliance/rustix
+  license: MIT
+  licenses:
+  - license: MIT
+    text: |
+      Permission is hereby granted, free of charge, to any
+      person obtaining a copy of this software and associated
+      documentation files (the "Software"), to deal in the
+      Software without restriction, including without
+      limitation the rights to use, copy, modify, merge,
+      publish, distribute, sublicense, and/or sell copies of
+      the Software, and to permit persons to whom the Software
+      is furnished to do so, subject to the following
+      conditions:
+
+      The above copyright notice and this permission notice
+      shall be included in all copies or substantial portions
+      of the Software.
+
+      THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+      ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+      TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+      PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+      SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+      CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+      OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+      IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+      DEALINGS IN THE SOFTWARE.
 - package_name: serde
   package_version: 1.0.228
   repository: https://github.com/serde-rs/serde
@@ -1095,7 +1361,7 @@ third_party_libraries:
       IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
       DEALINGS IN THE SOFTWARE.
 - package_name: serde_json
-  package_version: 1.0.149
+  package_version: 1.0.150
   repository: https://github.com/serde-rs/json
   license: MIT
   licenses:
@@ -1125,15 +1391,16 @@ third_party_libraries:
       IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
       DEALINGS IN THE SOFTWARE.
 - package_name: sha2
-  package_version: 0.10.9
+  package_version: 0.11.0
   repository: https://github.com/RustCrypto/hashes
   license: MIT
   licenses:
   - license: MIT
     text: |
-      Copyright (c) 2006-2009 Graydon Hoare
-      Copyright (c) 2009-2013 Mozilla Foundation
+      Copyright (c) 2016-2026 The RustCrypto Project Developers
       Copyright (c) 2016 Artyom Pavlov
+      Copyright (c) 2009-2013 Mozilla Foundation
+      Copyright (c) 2006-2009 Graydon Hoare
 
       Permission is hereby granted, free of charge, to any
       person obtaining a copy of this software and associated
@@ -1276,15 +1543,101 @@ third_party_libraries:
       OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
       IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
       DEALINGS IN THE SOFTWARE.
-- package_name: tar
-  package_version: 0.4.45
-  repository: https://github.com/alexcrichton/tar-rs
+- package_name: syn
+  package_version: 3.0.3
+  repository: https://github.com/dtolnay/syn
   license: MIT
   licenses:
   - license: MIT
     text: |
-      Copyright (c) The tar-rs Project Contributors
+      Permission is hereby granted, free of charge, to any
+      person obtaining a copy of this software and associated
+      documentation files (the "Software"), to deal in the
+      Software without restriction, including without
+      limitation the rights to use, copy, modify, merge,
+      publish, distribute, sublicense, and/or sell copies of
+      the Software, and to permit persons to whom the Software
+      is furnished to do so, subject to the following
+      conditions:
 
+      The above copyright notice and this permission notice
+      shall be included in all copies or substantial portions
+      of the Software.
+
+      THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+      ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+      TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+      PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+      SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+      CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+      OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+      IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+      DEALINGS IN THE SOFTWARE.
+- package_name: tar-core
+  package_version: 0.1.0
+  repository: https://github.com/composefs/tar-core
+  license: MIT
+  licenses:
+  - license: MIT
+    text: |
+      MIT License
+
+      Copyright (c) 2024 The tar-core Authors
+
+      Permission is hereby granted, free of charge, to any person obtaining a copy
+      of this software and associated documentation files (the "Software"), to deal
+      in the Software without restriction, including without limitation the rights
+      to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+      copies of the Software, and to permit persons to whom the Software is
+      furnished to do so, subject to the following conditions:
+
+      The above copyright notice and this permission notice shall be included in all
+      copies or substantial portions of the Software.
+
+      THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+      IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+      FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+      AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+      LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+      OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+      SOFTWARE.
+- package_name: thiserror
+  package_version: 2.0.20
+  repository: https://github.com/dtolnay/thiserror
+  license: MIT
+  licenses:
+  - license: MIT
+    text: |
+      Permission is hereby granted, free of charge, to any
+      person obtaining a copy of this software and associated
+      documentation files (the "Software"), to deal in the
+      Software without restriction, including without
+      limitation the rights to use, copy, modify, merge,
+      publish, distribute, sublicense, and/or sell copies of
+      the Software, and to permit persons to whom the Software
+      is furnished to do so, subject to the following
+      conditions:
+
+      The above copyright notice and this permission notice
+      shall be included in all copies or substantial portions
+      of the Software.
+
+      THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+      ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+      TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+      PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+      SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+      CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+      OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+      IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+      DEALINGS IN THE SOFTWARE.
+- package_name: thiserror-impl
+  package_version: 2.0.20
+  repository: https://github.com/dtolnay/thiserror
+  license: MIT
+  licenses:
+  - license: MIT
+    text: |
       Permission is hereby granted, free of charge, to any
       person obtaining a copy of this software and associated
       documentation files (the "Software"), to deal in the
@@ -1900,6 +2253,104 @@ third_party_libraries:
           LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
           OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
           SOFTWARE
+- package_name: xattr
+  package_version: 1.6.1
+  repository: https://github.com/Stebalien/xattr
+  license: MIT
+  licenses:
+  - license: MIT
+    text: |
+      Copyright (c) 2015 Steven Allen
+
+      Permission is hereby granted, free of charge, to any
+      person obtaining a copy of this software and associated
+      documentation files (the "Software"), to deal in the
+      Software without restriction, including without
+      limitation the rights to use, copy, modify, merge,
+      publish, distribute, sublicense, and/or sell copies of
+      the Software, and to permit persons to whom the Software
+      is furnished to do so, subject to the following
+      conditions:
+
+      The above copyright notice and this permission notice
+      shall be included in all copies or substantial portions
+      of the Software.
+
+      THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+      ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+      TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+      PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+      SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+      CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+      OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+      IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+      DEALINGS IN THE SOFTWARE.
+- package_name: zerocopy
+  package_version: 0.8.56
+  repository: https://github.com/google/zerocopy
+  license: MIT
+  licenses:
+  - license: MIT
+    text: |+
+      Copyright 2023 The Fuchsia Authors
+
+      Permission is hereby granted, free of charge, to any
+      person obtaining a copy of this software and associated
+      documentation files (the "Software"), to deal in the
+      Software without restriction, including without
+      limitation the rights to use, copy, modify, merge,
+      publish, distribute, sublicense, and/or sell copies of
+      the Software, and to permit persons to whom the Software
+      is furnished to do so, subject to the following
+      conditions:
+
+      The above copyright notice and this permission notice
+      shall be included in all copies or substantial portions
+      of the Software.
+
+      THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+      ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+      TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+      PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+      SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+      CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+      OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+      IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+      DEALINGS IN THE SOFTWARE.
+
+- package_name: zerocopy-derive
+  package_version: 0.8.56
+  repository: https://github.com/google/zerocopy
+  license: MIT
+  licenses:
+  - license: MIT
+    text: |+
+      Copyright 2023 The Fuchsia Authors
+
+      Permission is hereby granted, free of charge, to any
+      person obtaining a copy of this software and associated
+      documentation files (the "Software"), to deal in the
+      Software without restriction, including without
+      limitation the rights to use, copy, modify, merge,
+      publish, distribute, sublicense, and/or sell copies of
+      the Software, and to permit persons to whom the Software
+      is furnished to do so, subject to the following
+      conditions:
+
+      The above copyright notice and this permission notice
+      shall be included in all copies or substantial portions
+      of the Software.
+
+      THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+      ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+      TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+      PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+      SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+      CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+      OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+      IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+      DEALINGS IN THE SOFTWARE.
+
 - package_name: zmij
   package_version: 1.0.21
   repository: https://github.com/dtolnay/zmij

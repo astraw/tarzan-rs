@@ -4,7 +4,10 @@
 
 use std::io::Cursor;
 
-use tarzan::format::{self, footer::FOOTER_FRAME_SIZE, toc::TocFrame};
+use tarzan::{
+    TarzanReader,
+    format::{self, footer::FOOTER_FRAME_SIZE, toc::TocFrame},
+};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -199,8 +202,8 @@ fn multiple_entries_all_appear_in_toc() {
 //
 // When a file's size exceeds the 8 GB octal limit of the ustar header, GNU/BSD
 // tars commonly emit a PAX `x` extended header with `size=<N>` and set the
-// in-header `size` field to zero. The tar crate honours the override via
-// `entry.size()`; using `header.size()` would return zero and misroute the
+// in-header `size` field to zero. The structural parser honours the override;
+// using only the raw header size would return zero and misroute the
 // member into the small-member group, leaving its data unflushed in the
 // streaming window. We don't fabricate a multi-GB file here — header size=0
 // with PAX size=<actual> is enough to exercise the same code path.
@@ -490,6 +493,53 @@ fn pax_prefixed_file_tar(path: &str, records: &[(&str, &str)], content: &[u8]) -
     out
 }
 
+fn encode_binary_pax_record(key: &[u8], value: &[u8]) -> Vec<u8> {
+    let payload_len = 1 + key.len() + 1 + value.len() + 1;
+    let mut len_digits = 1;
+    loop {
+        let total = len_digits + payload_len;
+        let prefix = total.to_string();
+        if prefix.len() == len_digits {
+            let mut record = Vec::with_capacity(total);
+            record.extend_from_slice(prefix.as_bytes());
+            record.push(b' ');
+            record.extend_from_slice(key);
+            record.push(b'=');
+            record.extend_from_slice(value);
+            record.push(b'\n');
+            return record;
+        }
+        len_digits += 1;
+    }
+}
+
+fn binary_pax_prefixed_file_tar(path: &str, records: &[(&[u8], &[u8])], content: &[u8]) -> Vec<u8> {
+    let mut pax_data = Vec::new();
+    for (key, value) in records {
+        pax_data.extend_from_slice(&encode_binary_pax_record(key, value));
+    }
+
+    let mut out = Vec::new();
+    write_header_block(
+        &mut out,
+        &format!("PaxHeaders/{path}"),
+        pax_data.len() as u64,
+        tar::EntryType::XHeader,
+    );
+    out.extend_from_slice(&pax_data);
+    pad_to_block(&mut out);
+    write_header_block(
+        &mut out,
+        path,
+        content.len() as u64,
+        tar::EntryType::Regular,
+    );
+    out.extend_from_slice(content);
+    pad_to_block(&mut out);
+    out.extend_from_slice(&[0u8; 1024]);
+    out
+}
+
 fn pax_global_header_tar(path: &str, content: &[u8]) -> Vec<u8> {
     fn encode_record(key: &str, value: &str) -> String {
         let suffix = format!(" {key}={value}\n");
@@ -513,6 +563,33 @@ fn pax_global_header_tar(path: &str, content: &[u8]) -> Vec<u8> {
         tar::EntryType::XGlobalHeader,
     );
     out.extend_from_slice(global.as_bytes());
+    pad_to_block(&mut out);
+    write_header_block(
+        &mut out,
+        path,
+        content.len() as u64,
+        tar::EntryType::Regular,
+    );
+    out.extend_from_slice(content);
+    pad_to_block(&mut out);
+    out.extend_from_slice(&[0u8; 1024]);
+    out
+}
+
+fn pax_global_records_tar(records: &[(&[u8], &[u8])], path: &str, content: &[u8]) -> Vec<u8> {
+    let mut pax_data = Vec::new();
+    for (key, value) in records {
+        pax_data.extend_from_slice(&encode_binary_pax_record(key, value));
+    }
+
+    let mut out = Vec::new();
+    write_header_block(
+        &mut out,
+        "pax_global_header",
+        pax_data.len() as u64,
+        tar::EntryType::XGlobalHeader,
+    );
+    out.extend_from_slice(&pax_data);
     pad_to_block(&mut out);
     write_header_block(
         &mut out,
@@ -561,20 +638,20 @@ fn pax_size_mismatch_tar(path: &str) -> Vec<u8> {
 
 #[test]
 fn pax_encoded_sparse_entry_is_downgraded_to_other() {
-    // PAX-encoded GNU sparse (format 1.0) uses a regular-file entry type whose
+    // PAX-encoded GNU sparse uses a regular-file entry type whose
     // on-disk payload is the sparse-encoded blob — not the logical file. The
-    // `tar` crate does not interpret these as sparse, so a naive wrap would
-    // hash the blob and report a file size that does not match the original.
-    // We downgrade the TOC entry to `Other` so consumers cannot mistake the
-    // blob for the file content.
-    let blob = b"1\n0\n9\nreal-data\x00"; // not a valid 1.0 map; payload shape is unused here
+    // TOC cannot currently represent sparse extents, so we downgrade the entry
+    // to `Other` rather than letting consumers mistake these bytes for the
+    // expanded logical file.
+    let blob = b"real-data";
     let raw = pax_prefixed_file_tar(
         "sparse.bin",
         &[
-            ("GNU.sparse.major", "1"),
-            ("GNU.sparse.minor", "0"),
+            ("GNU.sparse.major", "0"),
+            ("GNU.sparse.minor", "1"),
             ("GNU.sparse.realsize", "4105"),
             ("GNU.sparse.name", "sparse.bin"),
+            ("GNU.sparse.map", "4096,9"),
         ],
         blob,
     );
@@ -646,6 +723,118 @@ fn pax_mtime_mode_and_xattrs_are_captured_in_toc() {
 }
 
 #[test]
+fn binary_pax_xattr_with_newlines_wraps_and_remains_seekable() {
+    // macOS bsdtar writes raw SCHILY xattrs alongside its base64-encoded
+    // LIBARCHIVE records. PAX records are length-delimited, so newlines and
+    // NUL bytes inside a value are data, not record separators.
+    let xattr = b"rsrc\n\0\x01\x02\xff";
+    let content = b"ordinary file content";
+    let raw = binary_pax_prefixed_file_tar(
+        "resource-fork.txt",
+        &[(b"SCHILY.xattr.com.apple.ResourceFork", xattr)],
+        content,
+    );
+
+    let wrapped = wrap(&raw);
+    let decoded = zstd::stream::decode_all(Cursor::new(&wrapped)).unwrap();
+    assert_eq!(
+        decoded, raw,
+        "binary PAX tar bytes must round-trip verbatim"
+    );
+
+    let toc = decode_toc(&wrapped);
+    let member = toc
+        .members
+        .iter()
+        .find(|member| member.path == "resource-fork.txt")
+        .expect("resource-fork.txt must be indexed");
+    assert_eq!(member.tar_offset, 1024, "offset must name the real header");
+    assert_eq!(
+        member
+            .xattrs
+            .as_ref()
+            .and_then(|attrs| attrs.get("com.apple.ResourceFork"))
+            .map(Vec::as_slice),
+        Some(xattr.as_slice())
+    );
+
+    let mut reader = TarzanReader::from_seekable(Cursor::new(wrapped)).unwrap();
+    let mut extracted = Vec::new();
+    reader
+        .extract_member("resource-fork.txt", &mut extracted)
+        .unwrap();
+    assert_eq!(extracted, content);
+}
+
+#[test]
+fn libarchive_xattr_is_decoded_from_base64() {
+    let content = b"ordinary file content";
+    let raw = binary_pax_prefixed_file_tar(
+        "resource-fork.txt",
+        &[(b"LIBARCHIVE.xattr.com.apple.ResourceFork", b"cnNyYwoAAQL/")],
+        content,
+    );
+    let toc = decode_toc(&wrap(&raw));
+    let member = toc
+        .members
+        .iter()
+        .find(|member| member.path == "resource-fork.txt")
+        .expect("resource-fork.txt must be indexed");
+    assert_eq!(
+        member
+            .xattrs
+            .as_ref()
+            .and_then(|attrs| attrs.get("com.apple.ResourceFork"))
+            .map(Vec::as_slice),
+        Some(b"rsrc\n\0\x01\x02\xff".as_slice())
+    );
+}
+
+#[test]
+fn apple_double_companion_is_preserved_as_an_ordinary_member() {
+    let apple_double = b"\0\x05\x16\x07\0\x02Mac OS X metadata";
+    let content = b"ordinary file content";
+    let raw = make_tar(|builder| {
+        for (path, data) in [
+            ("._document.txt", apple_double.as_slice()),
+            ("document.txt", content.as_slice()),
+        ] {
+            let mut header = tar::Header::new_ustar();
+            header.set_path(path).unwrap();
+            header.set_size(data.len() as u64);
+            header.set_mode(0o644);
+            header.set_uid(0);
+            header.set_gid(0);
+            header.set_mtime(0);
+            header.set_cksum();
+            builder.append(&header, Cursor::new(data)).unwrap();
+        }
+    });
+
+    let wrapped = wrap(&raw);
+    let decoded = zstd::stream::decode_all(Cursor::new(&wrapped)).unwrap();
+    assert_eq!(decoded, raw, "AppleDouble bytes must round-trip verbatim");
+    let toc = decode_toc(&wrapped);
+    assert!(
+        toc.members
+            .iter()
+            .any(|member| member.path == "._document.txt")
+    );
+    assert!(
+        toc.members
+            .iter()
+            .any(|member| member.path == "document.txt")
+    );
+
+    let mut reader = TarzanReader::from_seekable(Cursor::new(wrapped)).unwrap();
+    let mut extracted = Vec::new();
+    reader
+        .extract_member("document.txt", &mut extracted)
+        .unwrap();
+    assert_eq!(extracted, content);
+}
+
+#[test]
 fn pax_global_header_is_not_indexed_as_member() {
     let raw = pax_global_header_tar("real.txt", b"hello");
     let wrapped = wrap(&raw);
@@ -658,6 +847,61 @@ fn pax_global_header_is_not_indexed_as_member() {
         "global PAX pseudo-member must not be indexed"
     );
     assert!(toc.members.iter().any(|m| m.path == "real.txt"));
+}
+
+#[test]
+fn pax_global_metadata_applies_to_following_member() {
+    let raw = pax_global_records_tar(
+        &[
+            (b"uname", b"archive-owner"),
+            (b"gname", b"archive-group"),
+            (b"mtime", b"1715000000.125"),
+            (b"SCHILY.xattr.user.global", b"global-value"),
+        ],
+        "real.txt",
+        b"hello",
+    );
+    let toc = decode_toc(&wrap(&raw));
+    let member = toc
+        .members
+        .iter()
+        .find(|member| member.path == "real.txt")
+        .expect("real.txt must be indexed");
+    assert_eq!(member.uname.as_deref(), Some("archive-owner"));
+    assert_eq!(member.gname.as_deref(), Some("archive-group"));
+    assert_eq!(member.mtime, 1_715_000_000);
+    assert_eq!(member.mtime_ns, Some(125_000_000));
+    assert_eq!(
+        member
+            .xattrs
+            .as_ref()
+            .and_then(|attrs| attrs.get("user.global"))
+            .map(Vec::as_slice),
+        Some(b"global-value".as_slice())
+    );
+}
+
+#[test]
+fn trailing_pax_global_header_is_preserved() {
+    let mut raw = single_file_tar("real.txt", 0o644, b"hello");
+    raw.truncate(raw.len() - 1024);
+    let record = encode_binary_pax_record(b"comment", b"no following member");
+    write_header_block(
+        &mut raw,
+        "pax_global_header",
+        record.len() as u64,
+        tar::EntryType::XGlobalHeader,
+    );
+    raw.extend_from_slice(&record);
+    pad_to_block(&mut raw);
+    raw.extend_from_slice(&[0u8; 1024]);
+
+    let wrapped = wrap(&raw);
+    let decoded = zstd::stream::decode_all(Cursor::new(&wrapped)).unwrap();
+    assert_eq!(decoded, raw);
+    let toc = decode_toc(&wrapped);
+    assert_eq!(toc.members.len(), 1);
+    assert_eq!(toc.members[0].path, "real.txt");
 }
 
 #[test]

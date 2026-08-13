@@ -4,7 +4,9 @@ use std::io::{Read, Write};
 use std::rc::Rc;
 
 use anyhow::{Context, Result, bail};
+use base64::Engine as _;
 use sha2::{Digest, Sha256};
+use tar_core::parse::{Limits, ParseEvent, ParsedEntry, Parser};
 use tracing::debug;
 
 use crate::format::{
@@ -66,10 +68,10 @@ impl WrapOptions {
 
 /// A sliding window of raw tar bytes captured from the input stream.
 ///
-/// Holds the bytes from absolute offset `base` up to whatever the tar reader
-/// has consumed so far. Frames are sliced out of this buffer and the consumed
-/// prefix is drained, so peak memory stays bounded by the configured chunk
-/// size rather than by the size of the whole archive.
+/// Holds the bytes from absolute offset `base` up to whatever the structural
+/// parser has requested so far. Frames are sliced out of this buffer and the
+/// consumed prefix is drained, so peak memory stays bounded by the configured
+/// chunk size rather than by the size of the whole archive.
 struct Window {
     buf: Vec<u8>,
     base: u64,
@@ -115,10 +117,9 @@ impl Window {
 
 /// A `Read` adapter that copies every byte it serves into a shared [`Window`].
 ///
-/// The tar reader reads its headers and member data through this adapter,
-/// which lets `wrap` recover the exact raw tar bytes — including PAX/GNU
-/// extension headers, which the `tar` crate consumes without exposing — and
-/// compress them verbatim.
+/// Header parsing and member-data streaming both read through this adapter,
+/// which lets `wrap` retain PAX/GNU extension headers and every other input
+/// byte for verbatim compression.
 struct CapturingReader<R> {
     inner: R,
     window: Rc<RefCell<Window>>,
@@ -130,15 +131,6 @@ impl<R: Read> Read for CapturingReader<R> {
         self.window.borrow_mut().buf.extend_from_slice(&buf[..n]);
         Ok(n)
     }
-}
-
-/// A member parsed but not yet emitted: its trailing padding is only captured
-/// once the *next* entry's header has been read.
-enum Pending {
-    /// A small member, awaiting placement into the current group.
-    Small { idx: usize, region_size: u64 },
-    /// A large member whose final (sub-chunk-size) frame is not yet emitted.
-    Large { idx: usize, entry_end: u64 },
 }
 
 /// Wraps an existing tar stream into a tarzan archive.
@@ -174,10 +166,13 @@ where
         buf: Vec::new(),
         base: 0,
     }));
-    let mut archive = tar::Archive::new(CapturingReader {
+    let mut reader = CapturingReader {
         inner: input,
         window: Rc::clone(&window),
-    });
+    };
+    let mut parser = Parser::new(Limits::default());
+    parser.set_allow_empty_path(true);
+    let mut global_pax = PaxRecords::new();
 
     // Everything from the identity frame through the TOC frame is hashed; the
     // footer (which carries the hash) is written outside the hashed region.
@@ -201,21 +196,145 @@ where
     // Non-indexed entries (e.g. PAX global headers) are folded into the next
     // indexed member's region so extraction offsets remain consistent.
     let mut prev_indexed_entry_end: u64 = 0;
-    // Absolute tar offset where the most recently parsed tar entry ends.
-    let mut last_entry_end: u64 = 0;
-    let mut pending: Option<Pending> = None;
     let mut scratch = vec![0u8; 64 * 1024];
+    let mut parse_start = 0u64;
+    let marker_start = loop {
+        match parse_next(&mut parser, &mut reader, &window, parse_start, &global_pax)? {
+            ParsedItem::Global { consumed, records } => {
+                update_global_pax(&mut global_pax, records);
+                parse_start = parse_start
+                    .checked_add(consumed as u64)
+                    .ok_or_else(|| anyhow::anyhow!("global PAX offset overflows"))?;
+            }
+            ParsedItem::End => break parse_start,
+            ParsedItem::Member(metadata) => {
+                let metadata = *metadata;
+                let entry_end = metadata
+                    .data_start
+                    .checked_add(padded_data_size(metadata.on_disk_size)?)
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "tar entry {} ending at {}+padded({}) overflows",
+                            metadata.member.path,
+                            metadata.data_start,
+                            metadata.on_disk_size
+                        )
+                    })?;
+                let region_size =
+                    entry_end
+                        .checked_sub(prev_indexed_entry_end)
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "tar entry {} starts before the previous entry ended",
+                                metadata.member.path
+                            )
+                        })?;
+                prev_indexed_entry_end = entry_end;
+                parse_start = entry_end;
 
-    {
-        let entries = archive.entries().context("failed to read tar entries")?;
-        for entry in entries {
-            let mut entry = entry.context("failed to read tar entry")?;
+                let idx = members.len();
+                members.push(metadata.member);
 
-            // The previous member's region is now fully captured (the tar
-            // reader consumed this entry's extension headers and 512-byte
-            // header to reach it).
-            match pending.take() {
-                Some(Pending::Small { idx, region_size }) => {
+                {
+                    let w = window.borrow();
+                    debug!(
+                        members_len = members.len(),
+                        window_len = w.buf.len(),
+                        window_capacity = w.buf.capacity(),
+                        region_size,
+                        pos,
+                        "wrap loop state"
+                    );
+                }
+
+                if region_size >= chunk_size {
+                    flush_group(
+                        &mut output,
+                        &mut pos,
+                        &window,
+                        level,
+                        &mut members,
+                        &mut group,
+                        &mut group_size,
+                        &mut next_chunk_start,
+                        &mut on_member,
+                    )?;
+
+                    let is_file = matches!(members[idx].entry_type, EntryType::File);
+                    let mut sha256_ctx = (is_file && compute_sha256).then(Sha256::new);
+                    let mut md5_ctx = (is_file && compute_md5).then(md5::Context::new);
+                    let mut data_left = metadata.on_disk_size;
+
+                    push_full_chunks(
+                        &mut output,
+                        &mut pos,
+                        &window,
+                        level,
+                        &mut next_chunk_start,
+                        chunk_size,
+                        &mut members[idx].chunks,
+                    )?;
+                    while data_left > 0 {
+                        let want = data_left.min(scratch.len() as u64) as usize;
+                        let n = reader
+                            .read(&mut scratch[..want])
+                            .context("failed to read entry data")?;
+                        if n == 0 {
+                            bail!(
+                                "unexpected end of input while reading {}",
+                                members[idx].path
+                            );
+                        }
+                        if let Some(ctx) = &mut sha256_ctx {
+                            ctx.update(&scratch[..n]);
+                        }
+                        if let Some(ctx) = &mut md5_ctx {
+                            ctx.consume(&scratch[..n]);
+                        }
+                        data_left -= n as u64;
+                        push_full_chunks(
+                            &mut output,
+                            &mut pos,
+                            &window,
+                            level,
+                            &mut next_chunk_start,
+                            chunk_size,
+                            &mut members[idx].chunks,
+                        )?;
+                    }
+                    capture_to(&mut reader, &window, entry_end, &mut scratch)
+                        .with_context(|| format!("reading padding for {}", members[idx].path))?;
+                    push_full_chunks(
+                        &mut output,
+                        &mut pos,
+                        &window,
+                        level,
+                        &mut next_chunk_start,
+                        chunk_size,
+                        &mut members[idx].chunks,
+                    )?;
+                    push_frame(
+                        &mut output,
+                        &mut pos,
+                        &window,
+                        next_chunk_start,
+                        entry_end,
+                        level,
+                        &mut members[idx].chunks,
+                    )?;
+                    window.borrow_mut().drain_to(entry_end);
+                    next_chunk_start = entry_end;
+
+                    if let Some(hasher) = sha256_ctx {
+                        members[idx].content_sha256 = Some(finalize_sha256_hex(hasher));
+                    }
+                    if let Some(ctx) = md5_ctx {
+                        members[idx].content_md5 = Some(format!("{:x}", ctx.finalize()));
+                    }
+                    on_member(&members[idx]);
+                } else {
+                    capture_to(&mut reader, &window, entry_end, &mut scratch)
+                        .with_context(|| format!("reading data for {}", members[idx].path))?;
                     add_to_group(
                         &mut output,
                         &mut pos,
@@ -233,222 +352,16 @@ where
                         region_size,
                     )?;
                 }
-                Some(Pending::Large { idx, entry_end }) => {
-                    let end = entry_end.min(window.borrow().end());
-                    push_frame(
-                        &mut output,
-                        &mut pos,
-                        &window,
-                        next_chunk_start,
-                        end,
-                        level,
-                        &mut members[idx].chunks,
-                    )?;
-                    window.borrow_mut().drain_to(end);
-                    next_chunk_start = end;
-                    on_member(&members[idx]);
-                }
-                None => {}
-            }
-
-            let metadata = read_member_metadata(&mut entry)?;
-            // PAX local/global extension headers can override entry size. If
-            // both PAX size and in-header size are present (non-zero) on a
-            // non-sparse entry, they must agree; disagreement is hostile.
-            if matches!(
-                entry.header().entry_type(),
-                tar::EntryType::Regular | tar::EntryType::Continuous
-            ) && !metadata.is_sparse
-                && let Some(pax_size) = metadata.pax_size
-            {
-                let header_size = entry
-                    .header()
-                    .entry_size()
-                    .context("failed to read in-header entry size")?;
-                if header_size != 0 && header_size != pax_size {
-                    bail!(
-                        "refusing to wrap {}: PAX size={} disagrees with in-header size={}",
-                        metadata.member.path,
-                        pax_size,
-                        header_size
-                    );
-                }
-            }
-            // For GNU sparse the tar reader consumes the main header *and*
-            // any continuation headers before yielding the entry, so the
-            // data starts wherever the window currently ends. The on-disk
-            // data length is the raw size field (`entry_size`), not the
-            // expanded logical size that `entry.size()` reports. For every
-            // other entry type the two are identical and the window's end is
-            // exactly `header_pos + 512`.
-            let on_disk_size = if metadata.is_sparse {
-                entry
-                    .header()
-                    .entry_size()
-                    .context("failed to read sparse entry on-disk size")?
-            } else {
-                metadata.member.size
-            };
-            let data_start = window.borrow().end();
-            let entry_end = data_start
-                .checked_add(padded_data_size(on_disk_size)?)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "tar entry {} ending at {data_start}+padded({on_disk_size}) overflows",
-                        metadata.member.path
-                    )
-                })?;
-            let region_size = entry_end
-                .checked_sub(prev_indexed_entry_end)
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "tar entry {} starts before the previous entry ended",
-                        metadata.member.path
-                    )
-                })?;
-            last_entry_end = entry_end;
-
-            // Keep global PAX headers in the compressed byte stream but omit
-            // them from TOC member indexing.
-            if metadata.skip_toc {
-                continue;
-            }
-
-            prev_indexed_entry_end = entry_end;
-            let idx = members.len();
-            members.push(metadata.member);
-
-            {
-                let w = window.borrow();
-                debug!(
-                    members_len = members.len(),
-                    window_len = w.buf.len(),
-                    window_capacity = w.buf.capacity(),
-                    region_size,
-                    pos,
-                    "wrap loop state"
-                );
-            }
-
-            if region_size >= chunk_size {
-                // Large member: it gets its own frames, split at chunk_size.
-                // Flush any pending group so the large member starts a frame.
-                flush_group(
-                    &mut output,
-                    &mut pos,
-                    &window,
-                    level,
-                    &mut members,
-                    &mut group,
-                    &mut group_size,
-                    &mut next_chunk_start,
-                    &mut on_member,
-                )?;
-
-                // Pull the data through the window ourselves, emitting a frame
-                // whenever a full chunk_size has accumulated. Letting the tar
-                // reader skip the data instead would buffer the whole member.
-                // For regular files we also fold each scratch read into
-                // streaming checksum contexts of the member's content; chunks
-                // get drained from the window before we could go back and hash
-                // from there.
-                let is_file = matches!(members[idx].entry_type, EntryType::File);
-                let mut sha256_ctx = (is_file && compute_sha256).then(Sha256::new);
-                let mut md5_ctx = (is_file && compute_md5).then(md5::Context::new);
-                let mut data_left = members[idx].size;
-                while data_left > 0 {
-                    let want = data_left.min(scratch.len() as u64) as usize;
-                    let n = entry
-                        .read(&mut scratch[..want])
-                        .context("failed to read entry data")?;
-                    if n == 0 {
-                        bail!(
-                            "unexpected end of input while reading {}",
-                            members[idx].path
-                        );
-                    }
-                    if let Some(ctx) = &mut sha256_ctx {
-                        ctx.update(&scratch[..n]);
-                    }
-                    if let Some(ctx) = &mut md5_ctx {
-                        ctx.consume(&scratch[..n]);
-                    }
-                    data_left -= n as u64;
-                    while window.borrow().end() - next_chunk_start >= chunk_size {
-                        let end = next_chunk_start + chunk_size;
-                        push_frame(
-                            &mut output,
-                            &mut pos,
-                            &window,
-                            next_chunk_start,
-                            end,
-                            level,
-                            &mut members[idx].chunks,
-                        )?;
-                        window.borrow_mut().drain_to(end);
-                        next_chunk_start = end;
-                    }
-                }
-                if let Some(h) = sha256_ctx {
-                    members[idx].content_sha256 = Some(finalize_sha256_hex(h));
-                }
-                if let Some(ctx) = md5_ctx {
-                    members[idx].content_md5 = Some(format!("{:x}", ctx.finalize()));
-                }
-
-                pending = Some(Pending::Large { idx, entry_end });
-            } else {
-                // Small member: grouped into a shared frame. Its data is left
-                // for the tar reader to skip, which still captures it.
-                pending = Some(Pending::Small { idx, region_size });
             }
         }
-    }
+    };
 
-    // Drain whatever the tar reader left unread: the second end-of-archive zero
-    // block and any blocking-factor padding.
-    let mut reader = archive.into_inner();
+    // The parser has captured the end marker. Preserve any additional tar
+    // blocking-factor padding or concatenated trailing bytes verbatim.
     std::io::copy(&mut reader, &mut std::io::sink()).context("failed to drain trailing bytes")?;
     let total = window.borrow().end();
 
-    match pending.take() {
-        Some(Pending::Small { idx, region_size }) => {
-            add_to_group(
-                &mut output,
-                &mut pos,
-                &window,
-                level,
-                &mut members,
-                &mut group,
-                &mut group_size,
-                &mut next_chunk_start,
-                &mut on_member,
-                chunk_size,
-                compute_sha256,
-                compute_md5,
-                idx,
-                region_size,
-            )?;
-        }
-        Some(Pending::Large { idx, entry_end }) => {
-            let end = entry_end.min(total);
-            push_frame(
-                &mut output,
-                &mut pos,
-                &window,
-                next_chunk_start,
-                end,
-                level,
-                &mut members[idx].chunks,
-            )?;
-            window.borrow_mut().drain_to(end);
-            next_chunk_start = end;
-            on_member(&members[idx]);
-        }
-        None => {}
-    }
-
-    validate_end_of_archive(&window, last_entry_end, total)?;
+    validate_end_of_archive(&window, marker_start, total)?;
 
     flush_group(
         &mut output,
@@ -504,6 +417,120 @@ where
     Ok(())
 }
 
+type PaxRecords = BTreeMap<Vec<u8>, Vec<u8>>;
+
+enum ParsedItem {
+    Global {
+        consumed: usize,
+        records: Vec<(Vec<u8>, Vec<u8>)>,
+    },
+    Member(Box<MemberMetadata>),
+    End,
+}
+
+enum ParseAttempt {
+    NeedData(u64),
+    Item(ParsedItem),
+}
+
+fn parse_next<R: Read>(
+    parser: &mut Parser,
+    reader: &mut CapturingReader<R>,
+    window: &Rc<RefCell<Window>>,
+    parse_start: u64,
+    global_pax: &PaxRecords,
+) -> Result<ParsedItem> {
+    let mut scratch = [0u8; 64 * 1024];
+    loop {
+        let attempt = {
+            let captured = window.borrow();
+            let input = captured.try_slice(parse_start, captured.end())?;
+            let event = parser.parse(input).context("failed to parse tar header")?;
+            match event {
+                ParseEvent::NeedData { min_bytes } => {
+                    let target = parse_start
+                        .checked_add(min_bytes as u64)
+                        .ok_or_else(|| anyhow::anyhow!("tar parser input offset overflows"))?;
+                    ParseAttempt::NeedData(target)
+                }
+                ParseEvent::GlobalExtensions { consumed, pax_data } => {
+                    ParseAttempt::Item(ParsedItem::Global {
+                        consumed,
+                        records: parse_pax_records(pax_data)?,
+                    })
+                }
+                ParseEvent::Entry { consumed, entry } => {
+                    ParseAttempt::Item(ParsedItem::Member(Box::new(member_metadata_from_entry(
+                        input,
+                        parse_start,
+                        consumed,
+                        entry,
+                        global_pax,
+                        None,
+                    )?)))
+                }
+                ParseEvent::SparseEntry {
+                    consumed,
+                    entry,
+                    real_size,
+                    ..
+                } => ParseAttempt::Item(ParsedItem::Member(Box::new(member_metadata_from_entry(
+                    input,
+                    parse_start,
+                    consumed,
+                    entry,
+                    global_pax,
+                    Some(real_size),
+                )?))),
+                ParseEvent::End { .. } => ParseAttempt::Item(ParsedItem::End),
+            }
+        };
+
+        match attempt {
+            ParseAttempt::NeedData(target) => {
+                capture_to(reader, window, target, &mut scratch)
+                    .context("unexpected end of input while reading tar header")?;
+            }
+            ParseAttempt::Item(item) => return Ok(item),
+        }
+    }
+}
+
+fn capture_to<R: Read>(
+    reader: &mut CapturingReader<R>,
+    window: &Rc<RefCell<Window>>,
+    target: u64,
+    scratch: &mut [u8],
+) -> Result<()> {
+    while window.borrow().end() < target {
+        let missing = target - window.borrow().end();
+        let want = missing.min(scratch.len() as u64) as usize;
+        let n = reader.read(&mut scratch[..want])?;
+        if n == 0 {
+            bail!("tar stream ended before byte {target}");
+        }
+    }
+    Ok(())
+}
+
+fn push_full_chunks<W: Write>(
+    output: &mut W,
+    pos: &mut u64,
+    window: &Rc<RefCell<Window>>,
+    level: i32,
+    next_chunk_start: &mut u64,
+    chunk_size: u64,
+    chunks: &mut Vec<ChunkInfo>,
+) -> Result<()> {
+    while window.borrow().end() - *next_chunk_start >= chunk_size {
+        let end = *next_chunk_start + chunk_size;
+        push_frame(output, pos, window, *next_chunk_start, end, level, chunks)?;
+        window.borrow_mut().drain_to(end);
+        *next_chunk_start = end;
+    }
+    Ok(())
+}
+
 /// Adds a small member to the current group, flushing the group as needed to
 /// keep it within `chunk_size`.
 #[allow(clippy::too_many_arguments)]
@@ -528,9 +555,9 @@ where
     F: FnMut(&TocMember),
 {
     // Hash the member's content from the window before any flush could drain
-    // it. For small members the tar reader captured the content bytes when it
-    // skipped past them to reach the next entry; those bytes live in the
-    // window until the group they belong to is flushed.
+    // it. For small members the streaming loop captured the complete entry
+    // before it was added to the group; those bytes live in the window until
+    // the group is flushed.
     if matches!(members[idx].entry_type, EntryType::File) {
         let content_start = members[idx].tar_offset + 512;
         let content_end = content_start
@@ -748,7 +775,11 @@ fn padded_data_size(size: u64) -> Result<u64> {
 #[derive(Default)]
 struct PaxData {
     has_gnu_sparse_keys: bool,
+    path: Option<Vec<u8>>,
+    linkpath: Option<Vec<u8>>,
     pax_size: Option<u64>,
+    uid: Option<u64>,
+    gid: Option<u64>,
     mtime: Option<(i64, u32)>,
     atime: Option<(i64, u32)>,
     ctime: Option<(i64, u32)>,
@@ -760,83 +791,107 @@ struct PaxData {
 
 struct MemberMetadata {
     member: TocMember,
-    is_sparse: bool,
-    skip_toc: bool,
-    pax_size: Option<u64>,
+    data_start: u64,
+    on_disk_size: u64,
 }
 
-/// Reads an entry's metadata into a partial `TocMember` (with no `chunks`).
-///
-/// A regular-file entry whose merged PAX header carries any `GNU.sparse.*`
-/// key is a PAX-encoded sparse file (GNU tar formats 0.0, 0.1, 1.0). The
-/// `tar` crate does not interpret these as sparse, so the data on disk is
-/// the sparse-encoded blob, not the logical file content. Recording such
-/// an entry as `EntryType::File` would let consumers extract or hash the
-/// encoded blob and believe they had the original file. We downgrade it
-/// to `EntryType::Other` so the small-/large-member content-hashing path
-/// is skipped and tarzan's random-access tools refuse to treat it as a
-/// regular file. The raw tar bytes still round-trip verbatim, so
-/// `zstd -d | tar x` recovers the original file correctly.
-fn read_member_metadata<R: Read>(entry: &mut tar::Entry<'_, R>) -> Result<MemberMetadata> {
-    let pax = read_pax_data(entry)?;
-    let header_type = entry.header().entry_type();
-    let is_pax_sparse = matches!(header_type, tar::EntryType::Regular) && pax.has_gnu_sparse_keys;
-    let skip_toc = header_type.is_pax_global_extensions();
-    let entry_type = if is_pax_sparse {
+fn member_metadata_from_entry(
+    parser_input: &[u8],
+    parse_start: u64,
+    consumed: usize,
+    entry: ParsedEntry<'_>,
+    global_pax: &PaxRecords,
+    sparse_real_size: Option<u64>,
+) -> Result<MemberMetadata> {
+    let mut effective_records = global_pax.clone();
+    if let Some(local_pax) = entry.pax {
+        update_pax_records(&mut effective_records, parse_pax_records(local_pax)?);
+    }
+    let pax = pax_data_from_records(&effective_records);
+    let is_sparse = sparse_real_size.is_some() || pax.has_gnu_sparse_keys;
+
+    let header_address = entry.header.as_bytes().as_ptr() as usize;
+    let input_address = parser_input.as_ptr() as usize;
+    let relative_header = header_address
+        .checked_sub(input_address)
+        .ok_or_else(|| anyhow::anyhow!("tar parser returned a header outside its input"))?;
+    let tar_offset = parse_start
+        .checked_add(relative_header as u64)
+        .ok_or_else(|| anyhow::anyhow!("tar header offset overflows"))?;
+    let data_start = parse_start
+        .checked_add(consumed as u64)
+        .ok_or_else(|| anyhow::anyhow!("tar data offset overflows"))?;
+
+    let header_type = entry.entry_type;
+    let entry_type = if is_sparse {
         EntryType::Other
     } else {
         to_entry_type(header_type)
     };
-    let header = entry.header();
-    let path_bytes_full = entry.path_bytes();
-    let path_bytes = path_bytes_full.as_ref();
+    let path_bytes = pax.path.as_deref().unwrap_or(entry.path.as_ref());
     let path = String::from_utf8_lossy(path_bytes).into_owned();
     let path_bytes = std::str::from_utf8(path_bytes)
         .is_err()
         .then(|| path_bytes.to_vec());
-    // `entry.size()` honours PAX `size=` overrides, which the ustar octal
-    // size field cannot encode beyond 8 GB; `header.size()` would return the
-    // (typically zero) in-header value and misroute the giant member into
-    // the small-member group, leaving its data unflushed in the window.
-    //
-    // For GNU sparse entries `entry.size()` is the *expanded* (logical) size
-    // — what the file looks like after the holes are filled in. The raw
-    // on-disk data length (sum of the sparse extent lengths) is the
-    // `entry_size` field, and is what we use for tar-layout arithmetic in
-    // the wrap loop. We still record the logical size here so listings and
-    // extraction tooling show what users expect.
-    let size = entry.size();
-    let mut mode = header.mode().context("failed to read entry mode")?;
-    if let Some(pax_mode) = pax.mode {
-        mode = pax_mode;
+
+    let on_disk_size = if is_sparse {
+        entry.size
+    } else {
+        pax.pax_size.unwrap_or(entry.size)
+    };
+    if matches!(
+        header_type,
+        tar_core::EntryType::Regular | tar_core::EntryType::Continuous
+    ) && !is_sparse
+        && let Some(pax_size) = pax.pax_size
+    {
+        let header_size = entry
+            .header
+            .entry_size()
+            .context("failed to read in-header entry size")?;
+        if header_size != 0 && header_size != pax_size {
+            bail!(
+                "refusing to wrap {path}: PAX size={pax_size} disagrees with in-header size={header_size}"
+            );
+        }
     }
-    let uid = header.uid().context("failed to read entry uid")?;
-    let gid = header.gid().context("failed to read entry gid")?;
-    let mut mtime = header.mtime().context("failed to read entry mtime")? as i64;
-    let mut mtime_ns = None;
-    if let Some((sec, nsec)) = pax.mtime {
-        mtime = sec;
-        mtime_ns = Some(nsec);
-    }
-    let tar_offset = entry.raw_header_position();
-    let (link_target, link_target_bytes) = match entry.link_name_bytes().map(|c| c.into_owned()) {
+    let size = sparse_real_size.unwrap_or(on_disk_size);
+    let mode = pax.mode.unwrap_or(entry.mode);
+    let uid = pax.uid.unwrap_or(entry.uid);
+    let gid = pax.gid.unwrap_or(entry.gid);
+    let (mtime, mtime_ns) = match pax.mtime {
+        Some((seconds, nanos)) => (seconds, Some(nanos)),
+        None => (entry.mtime as i64, None),
+    };
+
+    let effective_link = pax.linkpath.as_deref().or(entry.link_target.as_deref());
+    let (link_target, link_target_bytes) = match effective_link {
         None => (None, None),
         Some(bytes) => {
-            let display = String::from_utf8_lossy(&bytes).into_owned();
-            let raw = std::str::from_utf8(&bytes).is_err().then_some(bytes);
+            let display = String::from_utf8_lossy(bytes).into_owned();
+            let raw = std::str::from_utf8(bytes).is_err().then(|| bytes.to_vec());
             (Some(display), raw)
         }
     };
 
-    let pax_size = pax.pax_size;
     let atime = pax.atime;
     let ctime = pax.ctime;
-    let uname = pax.uname.clone();
-    let gname = pax.gname.clone();
-    let xattrs = (!pax.xattrs.is_empty()).then_some(pax.xattrs.clone());
-    let raw_type_byte = (entry_type == EntryType::Other).then(|| header.as_bytes()[156]);
+    let uname = pax.uname.or_else(|| {
+        entry
+            .uname
+            .as_deref()
+            .map(|value| String::from_utf8_lossy(value).into_owned())
+    });
+    let gname = pax.gname.or_else(|| {
+        entry
+            .gname
+            .as_deref()
+            .map(|value| String::from_utf8_lossy(value).into_owned())
+    });
+    let xattrs = (!pax.xattrs.is_empty()).then_some(pax.xattrs);
+    let raw_type_byte = (entry_type == EntryType::Other).then(|| entry.header.as_bytes()[156]);
 
-    let mut member = TocMember {
+    let member = TocMember {
         path,
         path_bytes,
         entry_type,
@@ -863,17 +918,11 @@ fn read_member_metadata<R: Read>(entry: &mut tar::Entry<'_, R>) -> Result<Member
         content_md5: None,
         chunks: Vec::new(),
     };
-    if skip_toc {
-        // A global PAX header is metadata, not a file-like member.
-        member.content_sha256 = None;
-        member.content_md5 = None;
-    }
 
     Ok(MemberMetadata {
         member,
-        is_sparse: entry.header().entry_type().is_gnu_sparse(),
-        skip_toc,
-        pax_size,
+        data_start,
+        on_disk_size,
     })
 }
 
@@ -890,30 +939,63 @@ fn finalize_sha256_hex(hasher: Sha256) -> String {
         .collect()
 }
 
-/// Returns true if any of the entry's merged PAX keys begin with `GNU.sparse.`,
-/// indicating a PAX-encoded sparse file (formats 0.0, 0.1, 1.0).
-fn read_pax_data<R: Read>(entry: &mut tar::Entry<'_, R>) -> Result<PaxData> {
+fn parse_pax_records(raw: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>> {
+    tar_core::PaxExtensions::new(raw)
+        .map(|extension| {
+            let extension = extension.context("malformed PAX extension")?;
+            Ok((
+                extension.key_bytes().to_vec(),
+                extension.value_bytes().to_vec(),
+            ))
+        })
+        .collect()
+}
+
+fn update_global_pax(global: &mut PaxRecords, records: Vec<(Vec<u8>, Vec<u8>)>) {
+    update_pax_records(global, records);
+}
+
+fn update_pax_records(records: &mut PaxRecords, updates: Vec<(Vec<u8>, Vec<u8>)>) {
+    for (key, value) in updates {
+        if value.is_empty() {
+            records.remove(&key);
+        } else {
+            records.insert(key, value);
+        }
+    }
+}
+
+fn pax_data_from_records(records: &PaxRecords) -> PaxData {
     let mut data = PaxData::default();
-    let Some(exts) = entry
-        .pax_extensions()
-        .context("failed to read entry PAX extensions")?
-    else {
-        return Ok(data);
-    };
-    for ext in exts {
-        let ext = ext.context("malformed PAX extension")?;
-        let key = ext.key_bytes();
-        let value_bytes = ext.value_bytes();
+    let mut libarchive_xattrs = BTreeMap::new();
+    let mut schily_xattrs = BTreeMap::new();
+    for (key, value_bytes) in records {
         if key.starts_with(b"GNU.sparse.") {
             data.has_gnu_sparse_keys = true;
         }
 
-        match key {
+        match key.as_slice() {
+            b"path" => data.path = Some(value_bytes.clone()),
+            b"linkpath" => data.linkpath = Some(value_bytes.clone()),
             b"size" => {
                 if let Ok(s) = std::str::from_utf8(value_bytes)
                     && let Ok(n) = s.trim().parse::<u64>()
                 {
                     data.pax_size = Some(n);
+                }
+            }
+            b"uid" => {
+                if let Ok(s) = std::str::from_utf8(value_bytes)
+                    && let Ok(uid) = s.trim().parse::<u64>()
+                {
+                    data.uid = Some(uid);
+                }
+            }
+            b"gid" => {
+                if let Ok(s) = std::str::from_utf8(value_bytes)
+                    && let Ok(gid) = s.trim().parse::<u64>()
+                {
+                    data.gid = Some(gid);
                 }
             }
             b"mtime" => {
@@ -956,20 +1038,25 @@ fn read_pax_data<R: Read>(entry: &mut tar::Entry<'_, R>) -> Result<PaxData> {
             }
             _ => {
                 if let Some(suffix) = key.strip_prefix(b"SCHILY.xattr.") {
-                    data.xattrs.insert(
+                    schily_xattrs.insert(
                         String::from_utf8_lossy(suffix).into_owned(),
-                        value_bytes.to_vec(),
+                        value_bytes.clone(),
                     );
                 } else if let Some(suffix) = key.strip_prefix(b"LIBARCHIVE.xattr.") {
-                    data.xattrs.insert(
-                        String::from_utf8_lossy(suffix).into_owned(),
-                        value_bytes.to_vec(),
-                    );
+                    let name = String::from_utf8_lossy(suffix).into_owned();
+                    if let Ok(value) = base64::engine::general_purpose::STANDARD.decode(value_bytes)
+                    {
+                        libarchive_xattrs.insert(name, value);
+                    } else {
+                        debug!(xattr = %name, "ignoring invalid base64 LIBARCHIVE xattr");
+                    }
                 }
             }
         }
     }
-    Ok(data)
+    data.xattrs = libarchive_xattrs;
+    data.xattrs.extend(schily_xattrs);
+    data
 }
 
 fn parse_pax_timestamp(raw: &str) -> Option<(i64, u32)> {
@@ -1022,15 +1109,15 @@ fn parse_pax_timestamp(raw: &str) -> Option<(i64, u32)> {
     }
 }
 
-fn to_entry_type(t: tar::EntryType) -> EntryType {
+fn to_entry_type(t: tar_core::EntryType) -> EntryType {
     match t {
-        tar::EntryType::Regular | tar::EntryType::Continuous => EntryType::File,
-        tar::EntryType::Directory => EntryType::Dir,
-        tar::EntryType::Symlink => EntryType::Symlink,
-        tar::EntryType::Link => EntryType::HardLink,
-        tar::EntryType::Char => EntryType::CharDevice,
-        tar::EntryType::Block => EntryType::BlockDevice,
-        tar::EntryType::Fifo => EntryType::Fifo,
+        tar_core::EntryType::Regular | tar_core::EntryType::Continuous => EntryType::File,
+        tar_core::EntryType::Directory => EntryType::Dir,
+        tar_core::EntryType::Symlink => EntryType::Symlink,
+        tar_core::EntryType::Link => EntryType::HardLink,
+        tar_core::EntryType::Char => EntryType::CharDevice,
+        tar_core::EntryType::Block => EntryType::BlockDevice,
+        tar_core::EntryType::Fifo => EntryType::Fifo,
         _ => EntryType::Other,
     }
 }

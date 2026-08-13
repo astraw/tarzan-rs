@@ -193,6 +193,11 @@ device files correctly. Re-implementing that surface inside tarzan would
 either replicate tar poorly or shell out to it anyway, so we lean on
 the canonical `tar | tarzan wrap` pipeline instead.
 
+`wrap` parses the tar structure needed for indexing, including GNU and PAX
+extension records, but preserves the input bytes verbatim. Vendor-specific
+metadata that tarzan does not interpret therefore remains available to a
+native tar extractor after decompression.
+
 ### `tarzan list` — list contents
 
 Reads only the TOC skippable frame. Fast regardless of archive size.
@@ -352,9 +357,16 @@ not its target — the link is skipped with a warning. `--no-mtime` skips
 timestamp restoration entirely. Character/block devices and FIFOs are
 still skipped with a warning.
 
+For macOS-created archives, length-delimited binary PAX values are supported;
+`LIBARCHIVE.xattr.*` values are base64-decoded, while raw
+`SCHILY.xattr.*` values take precedence when both encodings name the same
+attribute. AppleDouble `._*` companions are preserved and indexed as ordinary
+members, but tarzan does not apply their Finder metadata or resource-fork
+semantics to the paired file.
+
 For workflows that need full fidelity — device files, FIFOs, ACLs,
-sparse files — fall back to standard tooling. Every tarzan archive is a
-valid zstd stream:
+sparse files, or native AppleDouble/resource-fork handling — fall back to
+standard tooling. Every tarzan archive is a valid zstd stream:
 
 ```sh
 zstd -d archive.tar.zst | tar x
