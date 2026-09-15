@@ -208,7 +208,7 @@ enum Commands {
         path: Option<String>,
 
         /// Skip per-chunk decompression and only verify the whole-archive
-        /// SHA-256 stored in the footer. One sequential read of the file
+        /// XXHash64 stored in the footer. One sequential read of the file
         /// instead of decompressing every chunk; catches any byte-level
         /// corruption (including stray bytes appended after the archive)
         /// but not, by itself, intra-chunk corruption that would only
