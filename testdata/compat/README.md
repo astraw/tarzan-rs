@@ -4,14 +4,17 @@ Archives produced by every published tarzan release, all wrapping the same
 input: a bsdtar archive of `testdata/fixtures/tiny-tree` created with
 
 ```sh
-COPYFILE_DISABLE=1 tar --format=pax --no-xattrs -cf tiny.tar -C testdata/fixtures/tiny-tree .
+COPYFILE_DISABLE=1 tar --format=pax --no-xattrs --uid 0 --gid 0 --uname '' --gname '' \
+    -cf tiny.tar -C testdata/fixtures/tiny-tree .
 ```
 
 `--format=pax` forces a PAX header per member so releases that read PAX
 records (sub-second `mtime`, `atime`, `ctime`) have something to record.
-`--no-xattrs` keeps host metadata such as macOS's `com.apple.provenance`
-out of the archive: it cannot be restored on other platforms, and the
-fixtures must extract cleanly everywhere CI runs.
+The remaining flags keep host facts out of the archive: `--no-xattrs` drops
+metadata such as macOS's `com.apple.provenance`, which cannot be restored on
+other platforms, and the owner flags replace the author's uid/gid and account
+name with root and empty names. `tests/fixture_hygiene.rs` fails if any
+committed fixture carries such facts without an explicit allowlist entry.
 
 Each fixture was written by the release binary installed from crates.io:
 
@@ -35,5 +38,10 @@ any v2 release must keep opening for as long as the v2 format is supported.
 | `tarzan-v0.3.0.tar.zst` | adds `content_md5` |
 | `tarzan-v0.4.0.tar.zst` | adds `mtime_ns`, `atime`, `ctime`, and the other optional metadata fields |
 
-When a release changes what `wrap` records, add a fixture for it here and a
-row to the table in `tests/compat.rs`.
+`golden/` holds the expected `list --json` and `info --json` output for
+each v2 fixture; `tests/golden_toc.rs` asserts the current binary reproduces
+it byte-for-byte on every CI platform. Regenerate after an intentional
+output change with `UPDATE_GOLDEN=1 cargo test --test golden_toc`.
+
+When a release changes what `wrap` records, add a fixture for it here, a row
+to the table in `tests/compat.rs`, and run the golden update.
