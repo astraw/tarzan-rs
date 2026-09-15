@@ -391,6 +391,8 @@ extraction continues:
 | hard links | reconstructed once the target exists | reported (`hard links`) when the target was filtered out |
 | device nodes, FIFOs | never created | reported (`device nodes`, `fifos`) |
 | sparse and vendor-specific entries | never created | reported (`unsupported entries`) |
+| two names the filesystem folds together (case, Unicode normalisation) | first member kept | second reported (`name collisions`), never overwrites the first |
+| names Windows cannot create (`CON`, `a:b`, trailing dot, `<>:"|?*`) | created on Unix | reported on Windows (`invalid names`) |
 | ownership (uid/gid) | not restored | not reported |
 
 When anything was not restored, `extract` prints one summary block to

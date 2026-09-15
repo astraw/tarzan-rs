@@ -329,6 +329,46 @@ fn fold_path(rel: &Path) -> String {
     rel.to_string_lossy().to_lowercase()
 }
 
+/// Returns why `rel` cannot be created on Windows, or `None` if it can.
+///
+/// Checked up front so the member is declined with a clear reason instead
+/// of failing mid-extraction with an opaque OS error, and so a child of an
+/// invalid directory name is declined for the same reason as the directory.
+#[cfg(windows)]
+fn platform_name_problem(member: &TocMember, rel: &Path) -> Option<String> {
+    if member.path_bytes.is_some() {
+        return Some("name is not valid UTF-8".to_owned());
+    }
+    for component in rel.components() {
+        let s = component.as_os_str().to_string_lossy();
+        if let Some(c) = s
+            .chars()
+            .find(|c| matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*') || (*c as u32) < 32)
+        {
+            return Some(format!("component {s:?} contains {c:?}"));
+        }
+        if s.ends_with('.') || s.ends_with(' ') {
+            return Some(format!("component {s:?} ends with a dot or space"));
+        }
+        let stem = s.split('.').next().unwrap_or("").to_ascii_uppercase();
+        let reserved = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+            || (stem.len() == 4
+                && (stem.starts_with("COM") || stem.starts_with("LPT"))
+                && matches!(stem.as_bytes()[3], b'1'..=b'9'));
+        if reserved {
+            return Some(format!("component {s:?} is a reserved device name"));
+        }
+    }
+    None
+}
+
+/// Unix filesystems accept any component without `/` or NUL, and tar cannot
+/// encode either, so every name is valid here.
+#[cfg(not(windows))]
+fn platform_name_problem(_member: &TocMember, _rel: &Path) -> Option<String> {
+    None
+}
+
 impl TarzanReader {
     /// Extracts archive members onto the filesystem under `dest`.
     ///
@@ -393,6 +433,10 @@ impl TarzanReader {
                 _ => continue,
             };
             let target = dest.join(&rel);
+            if let Some(problem) = platform_name_problem(member, &rel) {
+                report.decline(&member.path, LossKind::InvalidName, problem);
+                continue;
+            }
             if let Some(previous) = written.collides(&target, &rel, &member.path) {
                 report.decline(
                     &member.path,

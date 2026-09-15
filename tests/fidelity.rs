@@ -513,3 +513,63 @@ fn pre_existing_files_in_the_destination_are_overwritten_as_tar_does() {
     assert!(report.is_clean(), "{report:?}");
     assert_eq!(fs::read(dest.join("x.txt")).unwrap(), b"from archive");
 }
+
+/// Names Windows cannot create: a reserved device name, a colon, a trailing
+/// dot, a forbidden character inside a directory component.
+const WINDOWS_HOSTILE: &[(&str, &[u8])] = &[
+    ("CON.txt", b"reserved"),
+    ("a:b.txt", b"colon"),
+    ("trailing.", b"dot"),
+    ("dir?/inner.txt", b"question"),
+];
+
+fn windows_hostile_tar() -> Vec<u8> {
+    let mut entries: Vec<Entry<'_>> = WINDOWS_HOSTILE
+        .iter()
+        .map(|(path, content)| Entry::File {
+            path,
+            mode: 0o644,
+            content,
+        })
+        .collect();
+    entries.push(Entry::File {
+        path: "plain.txt",
+        mode: 0o644,
+        content: b"plain",
+    });
+    build_tar(&entries)
+}
+
+#[cfg(windows)]
+#[test]
+fn names_windows_cannot_create_are_declined_not_fatal() {
+    let temp = tempdir().unwrap();
+    let archive = wrap_to_file(&windows_hostile_tar(), temp.path(), "a.tar.zst");
+    let dest = temp.path().join("out");
+    let report = extract(&archive, &dest, &ExtractOptions::default()).unwrap();
+    assert_eq!(fs::read(dest.join("plain.txt")).unwrap(), b"plain");
+    assert_eq!(report.members_written, 1);
+    let declined: Vec<&str> = report.declined.iter().map(|l| l.path.as_str()).collect();
+    let expected: Vec<&str> = WINDOWS_HOSTILE.iter().map(|(p, _)| *p).collect();
+    assert_eq!(declined, expected, "{report:?}");
+    assert!(
+        report
+            .declined
+            .iter()
+            .all(|l| l.kind == LossKind::InvalidName),
+        "{report:?}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn names_windows_cannot_create_are_ordinary_on_unix() {
+    let temp = tempdir().unwrap();
+    let archive = wrap_to_file(&windows_hostile_tar(), temp.path(), "a.tar.zst");
+    let dest = temp.path().join("out");
+    let report = extract(&archive, &dest, &ExtractOptions::default()).unwrap();
+    assert!(report.is_clean(), "{report:?}");
+    for (path, content) in WINDOWS_HOSTILE {
+        assert_eq!(&fs::read(dest.join(path)).unwrap(), content, "{path}");
+    }
+}
