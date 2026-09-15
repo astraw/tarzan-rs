@@ -51,6 +51,10 @@ Whatever tarzan does not interpret (device nodes, ACLs, vendor-specific PAX
 keys, AppleDouble companions) is therefore still present for a native tar
 extractor after decompression, with exactly the semantics that tar gave it.
 
+**The contract in one sentence.** tarzan indexes facts and preserves bytes on
+the way in, and on the way out it guarantees content, attempts metadata, and
+reports the difference.
+
 ---
 
 ## Why tarzan?
