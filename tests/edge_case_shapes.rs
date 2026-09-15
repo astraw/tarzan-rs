@@ -993,3 +993,37 @@ fn multiple_entries_roundtrip_tar_bytes() {
     let decoded = zstd::stream::decode_all(Cursor::new(&wrapped)).unwrap();
     assert_eq!(decoded, raw);
 }
+
+/// Restoring xattrs is best effort. A name that no platform accepts (over
+/// 127 bytes, which macOS rejects outright; unprefixed, which Linux rejects
+/// as an unknown namespace) must produce a warning, not a failed extraction.
+#[cfg(unix)]
+#[test]
+fn unrestorable_xattr_warns_but_extraction_succeeds() {
+    let name = format!("SCHILY.xattr.{}", "x".repeat(200));
+    let raw = binary_pax_prefixed_file_tar(
+        "keep.txt",
+        &[(name.as_bytes(), b"value")],
+        b"content survives",
+    );
+    let wrapped = wrap(&raw);
+    let toc = decode_toc(&wrapped);
+    assert!(
+        toc.members.iter().any(|m| m.xattrs.is_some()),
+        "fixture must record the xattr so extraction attempts to restore it"
+    );
+
+    let temp = tempfile::tempdir().unwrap();
+    let archive = temp.path().join("a.tar.zst");
+    std::fs::write(&archive, &wrapped).unwrap();
+    let dest = temp.path().join("out");
+
+    let mut reader = tarzan::TarzanReader::open(&archive).unwrap();
+    reader
+        .extract_to_dir(&dest, &tarzan::ExtractOptions::default(), |_| {})
+        .expect("an xattr the platform refuses must not fail extraction");
+    assert_eq!(
+        std::fs::read(dest.join("keep.txt")).unwrap(),
+        b"content survives"
+    );
+}

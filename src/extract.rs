@@ -161,7 +161,7 @@ impl TarzanReader {
                 fs::create_dir_all(target)
                     .with_context(|| format!("creating dir {}", target.display()))?;
                 set_unix_mode(target, member.mode)?;
-                apply_member_xattrs(target, member)?;
+                apply_member_xattrs(target, member);
                 if opts.restore_mtime {
                     deferred
                         .dir_times
@@ -176,7 +176,7 @@ impl TarzanReader {
                     Ok(()) => {
                         writer.flush()?;
                         set_unix_mode(target, member.mode)?;
-                        apply_member_xattrs(target, member)?;
+                        apply_member_xattrs(target, member);
                         if opts.restore_mtime {
                             filetime::set_file_times(target, atime, mtime).with_context(|| {
                                 format!("setting file times on {}", target.display())
@@ -290,21 +290,32 @@ fn member_atime(member: &TocMember, fallback: FileTime) -> FileTime {
     }
 }
 
+/// Restores the member's recorded xattrs onto `target`, best effort.
+///
+/// Attributes are host-specific metadata: a `com.apple.*` name from a macOS
+/// archive is not a valid namespace on Linux, macOS refuses to set some
+/// system-managed attributes, and many filesystems do not support xattrs at
+/// all. The file's contents, mode, and timestamps are already correct by the
+/// time this runs, so a failure here is reported as a warning and extraction
+/// continues, matching what GNU tar and bsdtar do.
 #[cfg(unix)]
-fn apply_member_xattrs(target: &Path, member: &TocMember) -> Result<()> {
+fn apply_member_xattrs(target: &Path, member: &TocMember) {
     if let Some(xattrs) = &member.xattrs {
         for (name, value) in xattrs {
-            xattr::set(target, name, value)
-                .with_context(|| format!("setting xattr {name} on {}", target.display()))?;
+            if let Err(error) = xattr::set(target, name, value) {
+                warn!(
+                    path = %target.display(),
+                    xattr = %name,
+                    %error,
+                    "could not restore extended attribute; continuing"
+                );
+            }
         }
     }
-    Ok(())
 }
 
 #[cfg(not(unix))]
-fn apply_member_xattrs(_target: &Path, _member: &TocMember) -> Result<()> {
-    Ok(())
-}
+fn apply_member_xattrs(_target: &Path, _member: &TocMember) {}
 
 fn normalize_member_path(p: &str, strip: usize) -> Result<Option<PathBuf>> {
     if p.starts_with('/') {
