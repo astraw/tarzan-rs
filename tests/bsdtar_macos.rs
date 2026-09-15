@@ -68,7 +68,19 @@ impl Fixture {
         )
         .unwrap();
 
+        // bsdtar's default "restricted pax" format only emits a PAX header,
+        // and with it the fractional-second mtime, when some other property
+        // of the entry needs one. Give the stamped file an xattr so the
+        // header is guaranteed regardless of what the host adds on its own
+        // (developer Macs stamp every new file with com.apple.provenance;
+        // CI runners do not).
         fs::write(src.join("stamped.txt"), b"timestamped").unwrap();
+        xattr::set(
+            src.join("stamped.txt"),
+            "user.stamp",
+            b"forces a PAX header",
+        )
+        .unwrap();
         filetime::set_file_mtime(
             src.join("stamped.txt"),
             filetime::FileTime::from_unix_time(STAMPED_SECS, STAMPED_NANOS),
