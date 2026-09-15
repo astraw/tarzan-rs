@@ -71,10 +71,16 @@ pub fn base256_field(value: i64) -> [u8; 12] {
 
 fn header(path: &str, mode: u32, size: u64, ty: tar::EntryType) -> tar::Header {
     let mut h = tar::Header::new_ustar();
-    // Paths over the ustar limit are set by `append_data`, which emits a
-    // GNU long-name record; keep the header valid with a placeholder.
+    // Write the name field as bytes rather than through `set_path`: the tar
+    // crate interprets the string as a host `Path`, and on Windows a name
+    // like `a:b.txt` parses as a drive prefix and is rejected. The corpus
+    // deliberately contains such names. Paths over the ustar limit are set
+    // later by `append_data`, which emits a GNU long-name record; keep the
+    // header valid with a placeholder until then.
     if path.len() <= 100 {
-        h.set_path(path).expect("ustar path fits");
+        let block = h.as_mut_bytes();
+        block[..100].fill(0);
+        block[..path.len()].copy_from_slice(path.as_bytes());
     } else {
         h.set_path("long-name-placeholder").unwrap();
     }
@@ -116,7 +122,12 @@ pub fn build_tar(entries: &[Entry<'_>]) -> Vec<u8> {
                 content,
             } => {
                 let mut h = header(path, *mode, content.len() as u64, tar::EntryType::Regular);
-                b.append_data(&mut h, path, Cursor::new(content)).unwrap();
+                if path.len() <= 100 {
+                    h.set_cksum();
+                    b.append(&h, Cursor::new(content)).unwrap();
+                } else {
+                    b.append_data(&mut h, path, Cursor::new(content)).unwrap();
+                }
             }
             Entry::Dir { path, mode } => {
                 let mut h = header(path, *mode, 0, tar::EntryType::Directory);
