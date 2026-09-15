@@ -1,0 +1,16 @@
+{
+  "avg_chunk_size_bytes": 12800,
+  "chunks": 1,
+  "content_md5_count": 4,
+  "content_sha256_count": 4,
+  "data_frame_bytes": 672,
+  "format_version": 2,
+  "identity_version": 2,
+  "members": 7,
+  "ratio": 0.10453125,
+  "regular_files": 4,
+  "size_bytes": 1338,
+  "toc_frame_bytes": 592,
+  "toc_offset": 708,
+  "uncompressed_bytes": 12800
+}

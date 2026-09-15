@@ -1,0 +1,170 @@
+[
+  {
+    "atime": 1779442505,
+    "atime_ns": 281275933,
+    "chunks": [
+      {
+        "compressed_offset": 14,
+        "compressed_size": 672,
+        "uncompressed_size": 1536
+      }
+    ],
+    "ctime": 1789455230,
+    "ctime_ns": 309148653,
+    "gid": 0,
+    "mode": 493,
+    "mtime": 1779442382,
+    "mtime_ns": 318174851,
+    "path": "./",
+    "size": 0,
+    "tar_offset": 1024,
+    "type": "dir",
+    "uid": 0
+  },
+  {
+    "atime": 1789455232,
+    "atime_ns": 66987589,
+    "chunks": [
+      {
+        "compressed_offset": 14,
+        "compressed_size": 672,
+        "frame_offset": 1536,
+        "uncompressed_size": 2048
+      }
+    ],
+    "content_md5": "030c6040577dfdd0eb38bf113c9d48fb",
+    "content_sha256": "ec744b9749cf3ba77e8a1195dc2e34bc885d36fb3c0bbf76ee6c5a570734979e",
+    "ctime": 1789455230,
+    "ctime_ns": 308655394,
+    "gid": 0,
+    "mode": 420,
+    "mtime": 1779442382,
+    "mtime_ns": 317875556,
+    "path": "./README.txt",
+    "size": 52,
+    "tar_offset": 2560,
+    "type": "file",
+    "uid": 0
+  },
+  {
+    "atime": 1779442471,
+    "atime_ns": 60533095,
+    "chunks": [
+      {
+        "compressed_offset": 14,
+        "compressed_size": 672,
+        "frame_offset": 3584,
+        "uncompressed_size": 1536
+      }
+    ],
+    "ctime": 1789455230,
+    "ctime_ns": 309030026,
+    "gid": 0,
+    "mode": 493,
+    "mtime": 1779442382,
+    "mtime_ns": 318089308,
+    "path": "./data/",
+    "size": 0,
+    "tar_offset": 4608,
+    "type": "dir",
+    "uid": 0
+  },
+  {
+    "atime": 1779442471,
+    "atime_ns": 60682055,
+    "chunks": [
+      {
+        "compressed_offset": 14,
+        "compressed_size": 672,
+        "frame_offset": 5120,
+        "uncompressed_size": 1536
+      }
+    ],
+    "ctime": 1789455230,
+    "ctime_ns": 309128778,
+    "gid": 0,
+    "mode": 493,
+    "mtime": 1779442382,
+    "mtime_ns": 318234893,
+    "path": "./src/",
+    "size": 0,
+    "tar_offset": 6144,
+    "type": "dir",
+    "uid": 0
+  },
+  {
+    "atime": 1789455232,
+    "atime_ns": 12112378,
+    "chunks": [
+      {
+        "compressed_offset": 14,
+        "compressed_size": 672,
+        "frame_offset": 6656,
+        "uncompressed_size": 2048
+      }
+    ],
+    "content_md5": "ec6cce8a1a30c99151b684f2e52d35b9",
+    "content_sha256": "190f9d1014687af5f7ca3e32768a0633befa38cedaf7a2faee58f5fc659c89ea",
+    "ctime": 1789455230,
+    "ctime_ns": 309109194,
+    "gid": 0,
+    "mode": 420,
+    "mtime": 1779442382,
+    "mtime_ns": 318275061,
+    "path": "./src/main.rs",
+    "size": 39,
+    "tar_offset": 7680,
+    "type": "file",
+    "uid": 0
+  },
+  {
+    "atime": 1789455232,
+    "atime_ns": 52041471,
+    "chunks": [
+      {
+        "compressed_offset": 14,
+        "compressed_size": 672,
+        "frame_offset": 8704,
+        "uncompressed_size": 2048
+      }
+    ],
+    "content_md5": "d14133f6410957561c9d175d29805311",
+    "content_sha256": "e5cadcc171cd5016f1786487fcfdb4bc9b7b43e5d138f72bd8ccfe8fd116138e",
+    "ctime": 1789455230,
+    "ctime_ns": 308958108,
+    "gid": 0,
+    "mode": 420,
+    "mtime": 1779442382,
+    "mtime_ns": 318133892,
+    "path": "./data/numbers.csv",
+    "size": 23,
+    "tar_offset": 9728,
+    "type": "file",
+    "uid": 0
+  },
+  {
+    "atime": 1789455232,
+    "atime_ns": 68612954,
+    "chunks": [
+      {
+        "compressed_offset": 14,
+        "compressed_size": 672,
+        "frame_offset": 10752,
+        "uncompressed_size": 2048
+      }
+    ],
+    "content_md5": "bafc5aec2de70f3f5e593ec3c33bc709",
+    "content_sha256": "378c8e862235d904549a744bb4552ae048c224ad7dba658bb39bf52398e27d98",
+    "ctime": 1789455230,
+    "ctime_ns": 309004483,
+    "gid": 0,
+    "mode": 420,
+    "mtime": 1779442382,
+    "mtime_ns": 318040974,
+    "path": "./data/blob.bin",
+    "size": 56,
+    "tar_offset": 11776,
+    "type": "file",
+    "uid": 0
+  }
+]

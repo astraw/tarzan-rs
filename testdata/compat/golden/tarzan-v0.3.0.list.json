@@ -1,0 +1,135 @@
+[
+  {
+    "chunks": [
+      {
+        "compressed_offset": 14,
+        "compressed_size": 672,
+        "uncompressed_size": 1536
+      }
+    ],
+    "gid": 0,
+    "mode": 493,
+    "mtime": 1779442382,
+    "path": "./",
+    "size": 0,
+    "tar_offset": 1024,
+    "type": "dir",
+    "uid": 0
+  },
+  {
+    "chunks": [
+      {
+        "compressed_offset": 14,
+        "compressed_size": 672,
+        "frame_offset": 1536,
+        "uncompressed_size": 2048
+      }
+    ],
+    "content_md5": "030c6040577dfdd0eb38bf113c9d48fb",
+    "content_sha256": "ec744b9749cf3ba77e8a1195dc2e34bc885d36fb3c0bbf76ee6c5a570734979e",
+    "gid": 0,
+    "mode": 420,
+    "mtime": 1779442382,
+    "path": "./README.txt",
+    "size": 52,
+    "tar_offset": 2560,
+    "type": "file",
+    "uid": 0
+  },
+  {
+    "chunks": [
+      {
+        "compressed_offset": 14,
+        "compressed_size": 672,
+        "frame_offset": 3584,
+        "uncompressed_size": 1536
+      }
+    ],
+    "gid": 0,
+    "mode": 493,
+    "mtime": 1779442382,
+    "path": "./data/",
+    "size": 0,
+    "tar_offset": 4608,
+    "type": "dir",
+    "uid": 0
+  },
+  {
+    "chunks": [
+      {
+        "compressed_offset": 14,
+        "compressed_size": 672,
+        "frame_offset": 5120,
+        "uncompressed_size": 1536
+      }
+    ],
+    "gid": 0,
+    "mode": 493,
+    "mtime": 1779442382,
+    "path": "./src/",
+    "size": 0,
+    "tar_offset": 6144,
+    "type": "dir",
+    "uid": 0
+  },
+  {
+    "chunks": [
+      {
+        "compressed_offset": 14,
+        "compressed_size": 672,
+        "frame_offset": 6656,
+        "uncompressed_size": 2048
+      }
+    ],
+    "content_md5": "ec6cce8a1a30c99151b684f2e52d35b9",
+    "content_sha256": "190f9d1014687af5f7ca3e32768a0633befa38cedaf7a2faee58f5fc659c89ea",
+    "gid": 0,
+    "mode": 420,
+    "mtime": 1779442382,
+    "path": "./src/main.rs",
+    "size": 39,
+    "tar_offset": 7680,
+    "type": "file",
+    "uid": 0
+  },
+  {
+    "chunks": [
+      {
+        "compressed_offset": 14,
+        "compressed_size": 672,
+        "frame_offset": 8704,
+        "uncompressed_size": 2048
+      }
+    ],
+    "content_md5": "d14133f6410957561c9d175d29805311",
+    "content_sha256": "e5cadcc171cd5016f1786487fcfdb4bc9b7b43e5d138f72bd8ccfe8fd116138e",
+    "gid": 0,
+    "mode": 420,
+    "mtime": 1779442382,
+    "path": "./data/numbers.csv",
+    "size": 23,
+    "tar_offset": 9728,
+    "type": "file",
+    "uid": 0
+  },
+  {
+    "chunks": [
+      {
+        "compressed_offset": 14,
+        "compressed_size": 672,
+        "frame_offset": 10752,
+        "uncompressed_size": 2048
+      }
+    ],
+    "content_md5": "bafc5aec2de70f3f5e593ec3c33bc709",
+    "content_sha256": "378c8e862235d904549a744bb4552ae048c224ad7dba658bb39bf52398e27d98",
+    "gid": 0,
+    "mode": 420,
+    "mtime": 1779442382,
+    "path": "./data/blob.bin",
+    "size": 56,
+    "tar_offset": 11776,
+    "type": "file",
+    "uid": 0
+  }
+]
