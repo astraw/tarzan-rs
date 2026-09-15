@@ -37,11 +37,47 @@ pub enum Entry<'a> {
     Pax {
         records: &'a [(&'a str, &'a [u8])],
     },
+    /// A header-only entry with an arbitrary type byte tarzan does not
+    /// materialise (e.g. `b'M'`, GNU multi-volume continuation).
+    Other {
+        path: &'a str,
+        type_byte: u8,
+    },
+    /// A regular file whose name field holds raw bytes (need not be UTF-8).
+    /// Limited to 100 bytes, the ustar name field.
+    RawNameFile {
+        name: &'a [u8],
+        content: &'a [u8],
+    },
+    /// A regular file whose in-header mtime is written in GNU base-256
+    /// ("binary") form, as GNU tar and bsdtar do for values that do not fit
+    /// the octal field, notably pre-1970 timestamps.
+    Base256MtimeFile {
+        path: &'a str,
+        mtime: i64,
+        content: &'a [u8],
+    },
+}
+
+/// Encodes `value` into a 12-byte GNU base-256 numeric field: leading byte
+/// 0xFF for negative (0x80 for positive) followed by the two's-complement
+/// big-endian magnitude.
+pub fn base256_field(value: i64) -> [u8; 12] {
+    let mut field = [if value < 0 { 0xFF } else { 0x80 }; 12];
+    let bytes = value.to_be_bytes();
+    field[4..].copy_from_slice(&bytes);
+    field
 }
 
 fn header(path: &str, mode: u32, size: u64, ty: tar::EntryType) -> tar::Header {
     let mut h = tar::Header::new_ustar();
-    h.set_path(path).expect("ustar path fits");
+    // Paths over the ustar limit are set by `append_data`, which emits a
+    // GNU long-name record; keep the header valid with a placeholder.
+    if path.len() <= 100 {
+        h.set_path(path).expect("ustar path fits");
+    } else {
+        h.set_path("long-name-placeholder").unwrap();
+    }
     h.set_mode(mode);
     h.set_uid(0);
     h.set_gid(0);
@@ -80,8 +116,7 @@ pub fn build_tar(entries: &[Entry<'_>]) -> Vec<u8> {
                 content,
             } => {
                 let mut h = header(path, *mode, content.len() as u64, tar::EntryType::Regular);
-                h.set_cksum();
-                b.append(&h, Cursor::new(content)).unwrap();
+                b.append_data(&mut h, path, Cursor::new(content)).unwrap();
             }
             Entry::Dir { path, mode } => {
                 let mut h = header(path, *mode, 0, tar::EntryType::Directory);
@@ -111,6 +146,37 @@ pub fn build_tar(entries: &[Entry<'_>]) -> Vec<u8> {
                 let mut h = header(path, 0o644, 0, tar::EntryType::Fifo);
                 h.set_cksum();
                 b.append(&h, Cursor::new(&[][..])).unwrap();
+            }
+            Entry::Other { path, type_byte } => {
+                let mut h = header(path, 0o644, 0, tar::EntryType::new(*type_byte));
+                h.set_cksum();
+                b.append(&h, Cursor::new(&[][..])).unwrap();
+            }
+            Entry::RawNameFile { name, content } => {
+                assert!(name.len() <= 100, "raw name must fit the ustar field");
+                let mut h = header(
+                    "placeholder",
+                    0o644,
+                    content.len() as u64,
+                    tar::EntryType::Regular,
+                );
+                {
+                    let block = h.as_mut_bytes();
+                    block[..100].fill(0);
+                    block[..name.len()].copy_from_slice(name);
+                }
+                h.set_cksum();
+                b.append(&h, Cursor::new(content)).unwrap();
+            }
+            Entry::Base256MtimeFile {
+                path,
+                mtime,
+                content,
+            } => {
+                let mut h = header(path, 0o644, content.len() as u64, tar::EntryType::Regular);
+                h.as_mut_bytes()[136..148].copy_from_slice(&base256_field(*mtime));
+                h.set_cksum();
+                b.append(&h, Cursor::new(content)).unwrap();
             }
             Entry::Pax { records } => {
                 let mut data = Vec::new();
