@@ -743,6 +743,8 @@ contributing model in its subject line.
 
 - An automated test suite (`cargo test`) covering wrapping, listing, extracting,
   verifying, error paths, and round-trip integrity
+- Archives written by every published release, kept under `testdata/compat/`,
+  which must keep listing, extracting, and verifying with the current code
 - CI that runs the suite on Linux and macOS on every push; the macOS job also
   wraps, lists, verifies, and extracts an archive produced by the host bsdtar
   with its default flags (AppleDouble companions, binary PAX xattrs,
