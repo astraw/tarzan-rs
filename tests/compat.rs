@@ -95,6 +95,26 @@ fn every_release_has_a_fixture_on_disk() {
     assert!(fixture_archive("0.1.2").is_file());
 }
 
+/// The fixtures must not depend on the host that generated them: an xattr
+/// such as macOS's `com.apple.provenance` cannot be restored on Linux, and
+/// extracting the fixture would then warn on every platform but the origin.
+/// They are generated with `tar --no-xattrs` for this reason.
+#[test]
+fn fixtures_carry_no_host_specific_xattrs() {
+    for release in V2_RELEASES {
+        let reader = tarzan::TarzanReader::open(&fixture_archive(release.version)).unwrap();
+        for member in reader.members() {
+            assert!(
+                member.xattrs.is_none(),
+                "v{} fixture member {} carries xattrs {:?}; regenerate with --no-xattrs",
+                release.version,
+                member.path,
+                member.xattrs
+            );
+        }
+    }
+}
+
 #[test]
 fn v2_archives_open_and_list_the_same_members() {
     for release in V2_RELEASES {

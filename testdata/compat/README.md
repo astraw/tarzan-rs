@@ -4,8 +4,14 @@ Archives produced by every published tarzan release, all wrapping the same
 input: a bsdtar archive of `testdata/fixtures/tiny-tree` created with
 
 ```sh
-COPYFILE_DISABLE=1 tar -cf tiny.tar -C testdata/fixtures/tiny-tree .
+COPYFILE_DISABLE=1 tar --format=pax --no-xattrs -cf tiny.tar -C testdata/fixtures/tiny-tree .
 ```
+
+`--format=pax` forces a PAX header per member so releases that read PAX
+records (sub-second `mtime`, `atime`, `ctime`) have something to record.
+`--no-xattrs` keeps host metadata such as macOS's `com.apple.provenance`
+out of the archive: it cannot be restored on other platforms, and the
+fixtures must extract cleanly everywhere CI runs.
 
 Each fixture was written by the release binary installed from crates.io:
 
@@ -27,7 +33,7 @@ any v2 release must keep opening for as long as the v2 format is supported.
 | `tarzan-v0.2.1.tar.zst` | |
 | `tarzan-v0.2.2.tar.zst` | PAX `size=` honoured when wrapping |
 | `tarzan-v0.3.0.tar.zst` | adds `content_md5` |
-| `tarzan-v0.4.0.tar.zst` | adds `mtime_ns`, `xattrs`, and the other optional metadata fields |
+| `tarzan-v0.4.0.tar.zst` | adds `mtime_ns`, `atime`, `ctime`, and the other optional metadata fields |
 
 When a release changes what `wrap` records, add a fixture for it here and a
 row to the table in `tests/compat.rs`.

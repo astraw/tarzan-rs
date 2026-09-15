@@ -100,7 +100,9 @@ fn wrap_sync_flags_all_roundtrip() {
         ("--no-sync", &["--no-sync"][..]),
         ("--sync (deprecated)", &["--sync"][..]),
     ] {
-        let out_path = temp.path().join(format!("{}.tar.zst", flags.len()));
+        let out_path = temp
+            .path()
+            .join(format!("{}.tar.zst", label.replace(' ', "_")));
         let status = Command::new(tarzan_bin())
             .arg("wrap")
             .args(flags)
