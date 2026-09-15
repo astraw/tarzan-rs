@@ -34,14 +34,8 @@ jobs:
       - name: Clippy (warnings denied)
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Clippy (pure-rust feature)
-        run: cargo clippy --all-targets --no-default-features --features pure-rust -- -D warnings
-
       - name: Test
         run: cargo test
-
-      - name: Test (pure-rust feature)
-        run: cargo test --no-default-features --features pure-rust
 
   test-macos:
     name: test (macos)
@@ -78,7 +72,7 @@ jobs:
             exit 0
           fi
           echo "Comparing against $LAST_TAG"
-          if cargo semver-checks check-release --baseline-rev "$LAST_TAG" --default-features; then
+          if cargo semver-checks check-release --baseline-rev "$LAST_TAG"; then
             exit 0
           fi
           # cargo-semver-checks found a breaking change.  Acceptable only when the

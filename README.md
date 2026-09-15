@@ -610,20 +610,9 @@ tools. Add it to your `Cargo.toml`:
 tarzan = "0.2"
 ```
 
-### Cargo features
-
-| Feature | Default | Description |
-|---|---|---|
-| `zstd-sys` | ✓ | Links the zstd C library via `zstd-sys`. Best compression performance. |
-| `pure-rust` | | Pure-Rust zstd via `zstd-pure-rs`. No C toolchain required; useful for cross-compilation. |
-
-Exactly one of the two features must be active. To opt into the pure-Rust build,
-disable the default features and enable `pure-rust`:
-
-```toml
-[dependencies]
-tarzan = { version = "0.2", default-features = false, features = ["pure-rust"] }
-```
+The crate has no Cargo features. Compression is provided by the
+[`zstd`](https://crates.io/crates/zstd) crate, which links the zstd C library
+statically via `zstd-sys`; a C compiler for the target is required to build.
 
 Full API documentation — including format details and usage examples — is on
 [docs.rs/tarzan](https://docs.rs/tarzan).
@@ -652,16 +641,6 @@ contributors.
 
 Releases are managed by [release-plz](https://release-plz.dev) and
 [cargo-dist](https://github.com/axodotdev/cargo-dist).
-
-### Checking semver compatibility
-
-When running [`cargo semver-checks`](https://github.com/obi1kenobi/cargo-semver-checks), always pass `--default-features`:
-
-```sh
-cargo semver-checks --default-features
-```
-
-Without it, `cargo semver-checks` may activate mutually-incompatible features (e.g. both `zstd-sys` and `pure-rust`) and fail to compile.
 
 ### How it fits together
 

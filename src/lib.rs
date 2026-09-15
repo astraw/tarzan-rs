@@ -204,18 +204,10 @@
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 //!
-//! # Cargo features
+//! # Dependencies
 //!
-//! | Feature | Default | Description |
-//! |---|---|---|
-//! | `zstd-sys` | ✓ | Links the zstd C library via `zstd-sys`. Best performance. |
-//! | `pure-rust` | | Pure-Rust zstd via `zstd-pure-rs`. No C toolchain needed. |
-//!
-//! Exactly one feature must be active. For cross-compilation without a C toolchain:
-//!
-//! ```toml
-//! tarzan = { version = "0.2", default-features = false, features = ["pure-rust"] }
-//! ```
+//! Compression is provided by the [`zstd`](https://docs.rs/zstd) crate, which
+//! links the zstd C library statically. There are no Cargo features.
 
 mod extract;
 pub mod filter;
