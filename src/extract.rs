@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -266,6 +267,68 @@ struct Deferred {
     hard_links: Vec<(String, PathBuf, PathBuf)>,
 }
 
+/// Files and symlinks created by this extraction, used to notice when the
+/// filesystem folds two distinct archive names onto one entry (case- or
+/// normalisation-insensitive filesystems). Directories are excluded: two
+/// archive directories folding together simply merge. Hard links are
+/// excluded: sharing an entry is their purpose.
+///
+/// The same archive path appearing twice is not a collision; tar semantics
+/// are that the later entry wins, and we keep that.
+#[derive(Default)]
+struct WrittenNames {
+    #[cfg(unix)]
+    by_inode: HashMap<(u64, u64), String>,
+    #[cfg(not(unix))]
+    by_folded_path: HashMap<String, String>,
+}
+
+impl WrittenNames {
+    /// If creating `target` (archive path `member_path`) would overwrite an
+    /// entry this run created under a *different* archive path, returns that
+    /// path.
+    fn collides(&self, target: &Path, rel: &Path, member_path: &str) -> Option<&str> {
+        let previous = self.lookup(target, rel)?;
+        (previous != member_path).then_some(previous)
+    }
+
+    #[cfg(unix)]
+    fn lookup(&self, target: &Path, _rel: &Path) -> Option<&str> {
+        use std::os::unix::fs::MetadataExt;
+        let meta = fs::symlink_metadata(target).ok()?;
+        self.by_inode
+            .get(&(meta.dev(), meta.ino()))
+            .map(String::as_str)
+    }
+
+    #[cfg(unix)]
+    fn record(&mut self, target: &Path, _rel: &Path, member_path: &str) {
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(meta) = fs::symlink_metadata(target) {
+            self.by_inode
+                .insert((meta.dev(), meta.ino()), member_path.to_owned());
+        }
+    }
+
+    /// Without a stable file identity API on this platform, approximate the
+    /// filesystem's folding as case-insensitivity, which is what NTFS does.
+    #[cfg(not(unix))]
+    fn lookup(&self, _target: &Path, rel: &Path) -> Option<&str> {
+        self.by_folded_path.get(&fold_path(rel)).map(String::as_str)
+    }
+
+    #[cfg(not(unix))]
+    fn record(&mut self, _target: &Path, rel: &Path, member_path: &str) {
+        self.by_folded_path
+            .insert(fold_path(rel), member_path.to_owned());
+    }
+}
+
+#[cfg(not(unix))]
+fn fold_path(rel: &Path) -> String {
+    rel.to_string_lossy().to_lowercase()
+}
+
 impl TarzanReader {
     /// Extracts archive members onto the filesystem under `dest`.
     ///
@@ -313,11 +376,12 @@ impl TarzanReader {
 
         let mut deferred = Deferred::default();
         let mut report = FidelityReport::default();
+        let mut written = WrittenNames::default();
 
         // Clone the member list so the loop can call `&mut self` methods
         // (extraction seeks the source) while iterating.
         let members = self.members().to_vec();
-        for member in &members {
+        for (index, member) in members.iter().enumerate() {
             if !includes.matches(&member.path) {
                 continue;
             }
@@ -329,9 +393,28 @@ impl TarzanReader {
                 _ => continue,
             };
             let target = dest.join(&rel);
-            if self.extract_one(member, &target, dest, opts, &mut deferred, &mut report)? {
+            if let Some(previous) = written.collides(&target, &rel, &member.path) {
+                report.decline(
+                    &member.path,
+                    LossKind::NameCollision,
+                    format!("this filesystem folds it onto {previous}, which was already written"),
+                );
+                continue;
+            }
+            if self.extract_one(
+                index,
+                member,
+                &target,
+                dest,
+                opts,
+                &mut deferred,
+                &mut report,
+            )? {
                 report.members_written += 1;
                 on_extracted(&member.path);
+                if matches!(member.entry_type, EntryType::File | EntryType::Symlink) {
+                    written.record(&target, &rel, &member.path);
+                }
             }
         }
 
@@ -383,8 +466,13 @@ impl TarzanReader {
     /// Writes one member. Returns `Ok(true)` if an entry was created at
     /// `target`, `Ok(false)` if the member was declined (and recorded in
     /// `report`) or queued for the hard-link pass.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one call site; a struct would only rename the arguments"
+    )]
     fn extract_one(
         &mut self,
+        index: usize,
         member: &TocMember,
         target: &Path,
         dest: &Path,
@@ -417,7 +505,9 @@ impl TarzanReader {
                 let file = File::create(target)
                     .with_context(|| format!("creating file {}", target.display()))?;
                 let mut writer = BufWriter::new(file);
-                match self.extract_member(&member.path, &mut writer) {
+                // By index, not path: an archive may name the same path
+                // twice, and tar semantics are that the later entry wins.
+                match self.extract_member_at(index, &mut writer) {
                     Ok(()) => {
                         writer.flush()?;
                         apply_member_xattrs(target, member, report);

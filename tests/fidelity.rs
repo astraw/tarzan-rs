@@ -407,3 +407,109 @@ fn skip_bad_chunks_declines_and_removes_the_partial_file() {
     assert_eq!(report.declined[0].kind, LossKind::BadData);
     assert_eq!(report.declined[0].path, "bad.bin");
 }
+
+/// Does the filesystem under `dir` fold two names onto one entry?
+fn folds(dir: &std::path::Path, a: &str, b: &str) -> bool {
+    fs::write(dir.join(a), b"probe").unwrap();
+    let folded = dir.join(b).exists();
+    let _ = fs::remove_file(dir.join(a));
+    folded
+}
+
+/// Two archive names the filesystem may fold onto one entry. On a folding
+/// filesystem (APFS, NTFS) the second member must be declined and the first
+/// left intact; elsewhere both are extracted. Either way, nothing silently
+/// overwrites another member's content.
+fn assert_fold_contract(first: &str, second: &str) {
+    let temp = tempdir().unwrap();
+    let raw = build_tar(&[
+        Entry::File {
+            path: first,
+            mode: 0o644,
+            content: b"first",
+        },
+        Entry::File {
+            path: second,
+            mode: 0o644,
+            content: b"second",
+        },
+    ]);
+    let archive = wrap_to_file(&raw, temp.path(), "a.tar.zst");
+    let dest = temp.path().join("out");
+    fs::create_dir(&dest).unwrap();
+    let folding = folds(&dest, first, second);
+
+    let report = extract(&archive, &dest, &ExtractOptions::default()).unwrap();
+    assert_eq!(
+        fs::read(dest.join(first)).unwrap(),
+        b"first",
+        "first member's content must survive"
+    );
+    if folding {
+        assert_eq!(report.members_written, 1);
+        assert_eq!(report.declined.len(), 1, "{report:?}");
+        assert_eq!(report.declined[0].kind, LossKind::NameCollision);
+        assert_eq!(report.declined[0].path, second);
+        assert!(
+            report.declined[0].detail.contains(first),
+            "detail should name the surviving member: {}",
+            report.declined[0].detail
+        );
+    } else {
+        assert!(report.is_clean(), "{report:?}");
+        assert_eq!(fs::read(dest.join(second)).unwrap(), b"second");
+    }
+}
+
+#[test]
+fn case_folding_filesystems_decline_the_second_name() {
+    assert_fold_contract("Readme.txt", "README.txt");
+}
+
+#[test]
+fn normalization_folding_filesystems_decline_the_second_name() {
+    // U+00E9 (NFC) versus e + U+0301 (NFD).
+    assert_fold_contract("caf\u{e9}.txt", "cafe\u{301}.txt");
+}
+
+#[test]
+fn duplicate_archive_paths_let_the_later_entry_win() {
+    let temp = tempdir().unwrap();
+    let raw = build_tar(&[
+        Entry::File {
+            path: "same.txt",
+            mode: 0o644,
+            content: b"old",
+        },
+        Entry::File {
+            path: "same.txt",
+            mode: 0o644,
+            content: b"new",
+        },
+    ]);
+    let archive = wrap_to_file(&raw, temp.path(), "a.tar.zst");
+    let dest = temp.path().join("out");
+    let report = extract(&archive, &dest, &ExtractOptions::default()).unwrap();
+    assert!(
+        report.is_clean(),
+        "same path twice is tar's overwrite, not a collision: {report:?}"
+    );
+    assert_eq!(fs::read(dest.join("same.txt")).unwrap(), b"new");
+}
+
+#[test]
+fn pre_existing_files_in_the_destination_are_overwritten_as_tar_does() {
+    let temp = tempdir().unwrap();
+    let raw = build_tar(&[Entry::File {
+        path: "x.txt",
+        mode: 0o644,
+        content: b"from archive",
+    }]);
+    let archive = wrap_to_file(&raw, temp.path(), "a.tar.zst");
+    let dest = temp.path().join("out");
+    fs::create_dir(&dest).unwrap();
+    fs::write(dest.join("x.txt"), b"stale").unwrap();
+    let report = extract(&archive, &dest, &ExtractOptions::default()).unwrap();
+    assert!(report.is_clean(), "{report:?}");
+    assert_eq!(fs::read(dest.join("x.txt")).unwrap(), b"from archive");
+}

@@ -192,6 +192,22 @@ impl TarzanReader {
     /// those chunks. A member whose data exceeds the wrap-time chunk size
     /// spans several chunks, which are decoded in sequence. Returns an error
     /// if the path is not found or the member is not a regular file.
+    /// Extracts the member at `index` in [`members`](Self::members).
+    ///
+    /// Unlike [`extract_member`](Self::extract_member), which resolves a
+    /// path and therefore finds the *first* member with that name, this
+    /// addresses a specific entry, so an archive that names the same path
+    /// twice can have each entry read.
+    pub fn extract_member_at(&mut self, index: usize, out: &mut dyn Write) -> Result<()> {
+        if index >= self.members.len() {
+            anyhow::bail!(
+                "member index {index} out of range ({} members)",
+                self.members.len()
+            );
+        }
+        extract_by_index(&mut self.source, &self.members, index, out)
+    }
+
     pub fn extract_member(&mut self, target_path: &str, out: &mut dyn Write) -> Result<()> {
         let member_idx = self
             .members
