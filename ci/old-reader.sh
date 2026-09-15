@@ -20,9 +20,18 @@ trap 'rm -rf "$work"' EXIT
 echo "old reader: $("$old" --version)"
 echo "new writer: $("$new" --version)"
 
-# Host-neutral tar of the fixture (same flags as testdata/compat/README.md).
+# Host-neutral tar of the fixture: PAX format, no xattrs, owner normalised
+# to root with no names (same intent as testdata/compat/README.md). GNU tar
+# and bsdtar spell the owner flags differently. TAR can override the binary
+# for local testing (e.g. TAR=gtar on macOS).
+TAR=${TAR:-tar}
 export COPYFILE_DISABLE=1
-tar --format=pax --no-xattrs --uid 0 --gid 0 --uname '' --gname '' \
+if "$TAR" --version 2>/dev/null | grep -q 'GNU tar'; then
+    owner_flags=(--owner=0 --group=0 --numeric-owner)
+else
+    owner_flags=(--uid 0 --gid 0 --uname '' --gname '')
+fi
+"$TAR" --format=pax --no-xattrs "${owner_flags[@]}" \
     -cf "$work/tiny.tar" -C "$root/testdata/fixtures/tiny-tree" .
 
 "$new" wrap "$work/tiny.tar" -f "$work/new.tar.zst"
