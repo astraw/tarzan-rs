@@ -804,6 +804,11 @@ contributing model in its subject line.
   `other` but not reconstructed; device nodes, FIFOs, and ACLs are preserved
   in the tar stream but skipped by `tarzan extract`. Those cases are covered
   only by hand-built fixtures, not by archives from GNU tar or bsdtar
+- **Pre-1970 timestamps** — GNU tar and bsdtar write these into the tar
+  header as a negative base-256 field, which the tar parser tarzan uses
+  currently rejects, so `wrap` fails on archives containing such files.
+  Negative PAX `mtime` records are accepted; only the header encoding is
+  affected
 
 ---
 

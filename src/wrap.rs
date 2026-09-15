@@ -172,6 +172,15 @@ where
     };
     let mut parser = Parser::new(Limits::default());
     parser.set_allow_empty_path(true);
+    // tarzan reads PAX records itself (size, uid, gid, mode, mtime with
+    // sign and fraction, atime, ctime, xattrs) and falls back to tar-core's
+    // header values only when a record is absent. tar-core's own numeric
+    // parsing is stricter than POSIX in one way that matters: it stores mtime
+    // as u64 and rejects the negative values GNU tar writes for pre-1970
+    // files. Let it skip records it cannot parse instead of failing the wrap;
+    // structural checks (header checksums, sizes that overflow padding,
+    // sparse maps) are unaffected by this switch.
+    parser.set_ignore_pax_errors(true);
     let mut global_pax = PaxRecords::new();
 
     // Everything from the identity frame through the TOC frame is hashed; the

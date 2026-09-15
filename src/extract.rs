@@ -362,11 +362,41 @@ fn platform_name_problem(member: &TocMember, rel: &Path) -> Option<String> {
     None
 }
 
-/// Unix filesystems accept any component without `/` or NUL, and tar cannot
-/// encode either, so every name is valid here.
-#[cfg(not(windows))]
+/// APFS and HFS+ only accept valid UTF-8 names; a raw-bytes name would fail
+/// at creation with EILSEQ, so decline it up front with a clear reason.
+#[cfg(target_os = "macos")]
+fn platform_name_problem(member: &TocMember, _rel: &Path) -> Option<String> {
+    member
+        .path_bytes
+        .is_some()
+        .then(|| "name is not valid UTF-8, which this platform's filesystems require".to_owned())
+}
+
+/// Other Unix filesystems accept any component without `/` or NUL, and tar
+/// cannot encode either, so every name is valid here.
+#[cfg(not(any(windows, target_os = "macos")))]
 fn platform_name_problem(_member: &TocMember, _rel: &Path) -> Option<String> {
     None
+}
+
+/// Did this I/O error come from the *name* rather than from the filesystem's
+/// state? Such failures (a FAT volume rejecting a byte sequence, a component
+/// over the platform limit) are portability problems the archive cannot be
+/// blamed for, so the member is declined instead of aborting the run.
+fn is_name_error(error: &std::io::Error) -> bool {
+    if matches!(
+        error.kind(),
+        std::io::ErrorKind::InvalidFilename | std::io::ErrorKind::InvalidInput
+    ) {
+        return true;
+    }
+    #[cfg(unix)]
+    if let Some(code) = error.raw_os_error()
+        && (code == libc::EILSEQ || code == libc::ENAMETOOLONG)
+    {
+        return true;
+    }
+    false
 }
 
 impl TarzanReader {
@@ -524,15 +554,27 @@ impl TarzanReader {
         deferred: &mut Deferred,
         report: &mut FidelityReport,
     ) -> Result<bool> {
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+        if let Some(parent) = target.parent()
+            && let Err(error) = fs::create_dir_all(parent)
+        {
+            if is_name_error(&error) {
+                report.decline(&member.path, LossKind::InvalidName, &error);
+                return Ok(false);
+            }
+            return Err(error).with_context(|| format!("creating {}", parent.display()));
         }
         let mtime = member_mtime(member);
         let atime = member_atime(member, mtime);
         match member.entry_type {
             EntryType::Dir => {
-                fs::create_dir_all(target)
-                    .with_context(|| format!("creating dir {}", target.display()))?;
+                if let Err(error) = fs::create_dir_all(target) {
+                    if is_name_error(&error) {
+                        report.decline(&member.path, LossKind::InvalidName, &error);
+                        return Ok(false);
+                    }
+                    return Err(error)
+                        .with_context(|| format!("creating dir {}", target.display()));
+                }
                 apply_member_xattrs(target, member, report);
                 apply_mode(target, member, report);
                 if opts.restore_mtime {
@@ -546,8 +588,17 @@ impl TarzanReader {
                 Ok(true)
             }
             EntryType::File => {
-                let file = File::create(target)
-                    .with_context(|| format!("creating file {}", target.display()))?;
+                let file = match File::create(target) {
+                    Ok(file) => file,
+                    Err(error) if is_name_error(&error) => {
+                        report.decline(&member.path, LossKind::InvalidName, &error);
+                        return Ok(false);
+                    }
+                    Err(error) => {
+                        return Err(error)
+                            .with_context(|| format!("creating file {}", target.display()));
+                    }
+                };
                 let mut writer = BufWriter::new(file);
                 // By index, not path: an archive may name the same path
                 // twice, and tar semantics are that the later entry wins.
