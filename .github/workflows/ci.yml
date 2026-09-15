@@ -121,6 +121,34 @@ jobs:
           CROSS_HOST_DIR: ${{ github.workspace }}/cross-host-in
         run: cargo test --test cross_host -- --ignored --nocapture
 
+  # Forward-compatibility probe. Not a promise: tarzan only guarantees that
+  # new readers open old archives. This job installs the first v2 release
+  # and the latest published release from crates.io and has each list,
+  # verify, and extract an archive wrapped by the current build, so a change
+  # that breaks old readers fails here and lands knowingly.
+  old-reader:
+    name: old reader ${{ matrix.old }} on new archive
+    strategy:
+      fail-fast: false
+      matrix:
+        old: ["0.2.0", "0.4.0"]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build current tarzan
+        run: cargo build --release
+
+      - name: Install tarzan ${{ matrix.old }} from crates.io
+        run: cargo install tarzan --version ${{ matrix.old }} --root "$HOME/tarzan-${{ matrix.old }}"
+
+      - name: Old reader on new archive
+        run: ci/old-reader.sh "$HOME/tarzan-${{ matrix.old }}/bin/tarzan" target/release/tarzan
+
   # Runs cargo-semver-checks against the last version tag.  If a breaking
   # API change is detected, the job requires at least one commit since that
   # tag to acknowledge it with feat!:, fix!:, or a BREAKING CHANGE footer.
