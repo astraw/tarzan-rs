@@ -11,7 +11,7 @@ use crate::format::{
     self,
     footer::{ARCHIVE_HASH_SEED, FOOTER_FRAME_SIZE, Footer, decode_footer_payload},
     identity::{IDENTITY_VERSION_V1_LEGACY, IDENTITY_VERSION_V2},
-    toc::{EntryType, TocMember, decode_toc_payload},
+    toc::{EntryType, TocFrame, TocMember, decode_toc_payload},
 };
 
 /// A seekable byte source a [`TarzanReader`] can read an archive from.
@@ -37,15 +37,29 @@ pub struct TarzanReader {
 }
 
 /// Result of verifying one member's stored SHA-256 content checksum.
+#[derive(Debug)]
 pub struct VerifyRecord {
     pub path: String,
     pub status: VerifyStatus,
 }
 
+#[derive(Debug)]
 pub enum VerifyStatus {
     Ok,
     Mismatch { expected: String, actual: String },
     NoChecksum,
+}
+
+impl std::fmt::Debug for TarzanReader {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TarzanReader")
+            .field("members", &self.members.len())
+            .field("archive_size", &self.archive_size)
+            .field("toc_offset", &self.toc_offset)
+            .field("toc_frame_size", &self.toc_frame_size)
+            .field("identity_version", &self.identity_version)
+            .finish_non_exhaustive()
+    }
 }
 
 impl TarzanReader {
@@ -97,8 +111,18 @@ impl TarzanReader {
             );
         }
 
-        let members = read_toc(&mut source, toc_offset, toc_frame_size)
+        let toc = read_toc(&mut source, toc_offset, toc_frame_size)
             .context("failed to read TOC frame")?;
+        // The JSON carries the format version too. It is redundant with the
+        // identity byte by design; a disagreement means a buggy writer or
+        // corruption, never a legitimately different schema.
+        if toc.tarzan_version != identity_version {
+            bail!(
+                "TOC declares tarzan_version {} but the identity frame says v{identity_version}",
+                toc.tarzan_version
+            );
+        }
+        let members = toc.members;
 
         // Bound every chunk byte range to the archive's data region and
         // reject overlap between distinct frames. Distinct members can share
@@ -464,7 +488,7 @@ fn read_footer<R: Read + Seek>(file: &mut R, file_size: u64) -> Result<Footer> {
 }
 
 /// Reads and decodes the TOC frame at the given offset.
-fn read_toc<R: Read + Seek>(file: &mut R, offset: u64, frame_size: u64) -> Result<Vec<TocMember>> {
+fn read_toc<R: Read + Seek>(file: &mut R, offset: u64, frame_size: u64) -> Result<TocFrame> {
     // On 32-bit targets `usize` tops out at ~4 GiB; zstd skippable frames can
     // legally go right up to that limit. Refuse rather than silently truncate.
     let frame_size_usize: usize = frame_size
@@ -497,8 +521,7 @@ fn read_toc<R: Read + Seek>(file: &mut R, offset: u64, frame_size: u64) -> Resul
             payload[4]
         );
     }
-    let toc = decode_toc_payload(payload).context("failed to decode TOC payload")?;
-    Ok(toc.members)
+    decode_toc_payload(payload).context("failed to decode TOC payload")
 }
 
 /// Reads and validates the leading identity frame, returning its version byte.
@@ -525,7 +548,7 @@ fn read_identity_frame<R: Read + Seek>(file: &mut R) -> Result<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::format::footer::encode_footer_frame;
+    use crate::format::footer::{ARCHIVE_HASH_SEED, Footer, encode_footer_frame};
     use crate::format::identity::identity_frame;
     use crate::format::toc::{ChunkInfo, EntryType, TocFrame, TocMember, encode_toc_frame};
     use std::io::Cursor;
@@ -792,6 +815,35 @@ mod tests {
             msg.contains("identity frame"),
             "expected identity-frame error, got: {msg}"
         );
+    }
+
+    #[test]
+    fn toc_version_must_match_identity_frame() {
+        // Same layout as `small_toc_bytes`, but the JSON claims version 3
+        // while the identity frame says 2.
+        let toc = TocFrame {
+            tarzan_version: 3,
+            members: vec![],
+        };
+        let toc_bytes = encode_toc_frame(&toc, 3).unwrap();
+        let identity = identity_frame();
+        let toc_offset = identity.len() as u64;
+        let mut archive = identity;
+        archive.extend_from_slice(&toc_bytes);
+        let mut hasher = twox_hash::XxHash64::with_seed(ARCHIVE_HASH_SEED);
+        std::hash::Hasher::write(&mut hasher, &archive);
+        archive.extend_from_slice(&encode_footer_frame(&Footer {
+            toc_offset,
+            toc_frame_size: toc_bytes.len() as u64,
+            archive_xxhash64: std::hash::Hasher::finish(&hasher),
+        }));
+        let err = match TarzanReader::from_seekable(Cursor::new(archive)) {
+            Ok(_) => panic!("mismatched tarzan_version must be rejected"),
+            Err(e) => e,
+        };
+        let msg = format!("{err:#}");
+        assert!(msg.contains("tarzan_version 3"), "{msg}");
+        assert!(msg.contains("identity frame says v2"), "{msg}");
     }
 
     #[test]

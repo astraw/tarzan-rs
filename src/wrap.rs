@@ -400,7 +400,7 @@ where
     }
 
     let toc = TocFrame {
-        tarzan_version: 2,
+        tarzan_version: crate::format::identity::FORMAT_VERSION,
         members,
     };
     let toc_offset = pos;
