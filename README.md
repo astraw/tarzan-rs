@@ -787,6 +787,11 @@ contributing model in its subject line.
   verifying, error paths, and round-trip integrity
 - Archives written by every published release, kept under `testdata/compat/`,
   which must keep listing, extracting, and verifying with the current code
+- A produce-anywhere/consume-anywhere CI matrix: each of Linux, macOS, and
+  Windows archives a source tree with its host `tar` and wraps it, then every
+  OS lists, verifies, and extracts every producer's archive, checking that
+  content lands byte-exact and that what could not be restored is only what
+  the extract contract predicts
 - CI that runs the suite on Linux, macOS, and Windows on every push; the macOS
   job also wraps, lists, verifies, and extracts an archive produced by the host
   bsdtar with its default flags (AppleDouble companions, binary PAX xattrs,
