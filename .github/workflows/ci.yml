@@ -7,7 +7,9 @@ on:
 jobs:
   # Linux carries the OS-agnostic checks (fmt, clippy, the
   # THIRD-PARTY-LICENSES libzstd sanity check) on top of the test suite.
-  # The other two jobs run the test suite only.
+  # The macOS and Windows jobs run the test suite only. The macOS job also
+  # exercises the host bsdtar (tests/bsdtar_macos.rs); on Windows the tests
+  # that shell out to `tar` use the bsdtar that ships in System32.
   check:
     name: lint + test (linux)
     runs-on: ubuntu-latest

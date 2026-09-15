@@ -128,10 +128,11 @@ Pre-built binaries for Linux (x86_64, aarch64), macOS (x86_64, Apple Silicon),
 and Windows (x86_64) are available on the
 [releases page](https://github.com/astraw/tarzan-rs/releases).
 
-Windows builds are provided but **untested**, and have two known limitations:
-extracting an archive that contains symlink members fails on those entries, and
-Unix permission bits are not restored. (`list -v` also shows timestamps in UTC
-rather than local time on Windows.) Linux and macOS are the tested platforms.
+Windows builds run the test suite in CI but have seen little real-world use,
+and have two known limitations: extracting an archive that contains symlink
+members fails on those entries, and Unix permission bits are not restored.
+(`list -v` also shows timestamps in UTC rather than local time on Windows.)
+Linux and macOS are the primary platforms.
 
 ---
 
@@ -748,17 +749,17 @@ contributing model in its subject line.
   verifying, error paths, and round-trip integrity
 - Archives written by every published release, kept under `testdata/compat/`,
   which must keep listing, extracting, and verifying with the current code
-- CI that runs the suite on Linux and macOS on every push; the macOS job also
-  wraps, lists, verifies, and extracts an archive produced by the host bsdtar
-  with its default flags (AppleDouble companions, binary PAX xattrs,
+- CI that runs the suite on Linux, macOS, and Windows on every push; the macOS
+  job also wraps, lists, verifies, and extracts an archive produced by the host
+  bsdtar with its default flags (AppleDouble companions, binary PAX xattrs,
   sub-second mtimes)
 - Iterative testing against real tar archives during development, with the human
   author reviewing each change before it was committed
 
 **Known gaps.** Coverage is thinner in a few areas:
 
-- **Windows** — release binaries are built, but CI does not run the test suite
-  there and the platform is untested in practice
+- **Windows** — the test suite runs in CI, but the platform has had no
+  real-world use; symlink extraction and permission bits are known gaps
 - **Performance** — no formal benchmarks against comparable tools (pixz, zip,
   plain tar.zst) have been run on realistic workloads
 - **Long-tail tar features** — sparse entries are parsed and indexed as
