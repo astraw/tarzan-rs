@@ -608,8 +608,7 @@ dependencies = [
 [[package]]
 name = "tar-core"
 version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a870b96d9b5bd13e81517d63a18da0f0c33de072eeb5a293a2e40f3830befa0e"
+source = "git+https://github.com/composefs/tar-core?rev=6d27e1366d98a2a1b81171054500439954a6e9a1#6d27e1366d98a2a1b81171054500439954a6e9a1"
 dependencies = [
  "thiserror",
  "zerocopy",
