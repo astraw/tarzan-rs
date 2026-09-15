@@ -175,9 +175,19 @@ enum Commands {
         #[arg(long = "skip-bad-chunks")]
         skip_bad_chunks: bool,
 
-        /// Print each member to stderr as it is extracted.
+        /// Print each member to stderr as it is extracted, and list every
+        /// item the fidelity summary would otherwise abbreviate.
         #[arg(short = 'v', long = "verbose")]
         verbose: bool,
+
+        /// Fail (exit status 2) if anything could not be restored: an
+        /// xattr the host rejects, a symlink on a platform without them, a
+        /// device node, a name the filesystem folds onto another. The tree
+        /// is still extracted as far as possible first; the flag only
+        /// changes the verdict. Without it, such losses are summarised on
+        /// stderr and the exit status stays 0.
+        #[arg(long = "strict")]
+        strict: bool,
 
         /// Restrict extraction to these paths or directory prefixes;
         /// omit to extract everything. Matching is by exact path,
@@ -267,7 +277,21 @@ fn resolve_stream(path: Option<PathBuf>) -> Option<PathBuf> {
     path.filter(|p| p.as_os_str() != "-")
 }
 
-fn main() -> Result<()> {
+fn main() {
+    if let Err(err) = run() {
+        // `extract --strict` reports an incomplete restore with exit status
+        // 2, distinct from 1 for hard failures (unreadable archive, I/O).
+        let code = if err.is::<tarzan::StrictFidelityError>() {
+            2
+        } else {
+            1
+        };
+        eprintln!("Error: {err:#}");
+        std::process::exit(code);
+    }
+}
+
+fn run() -> Result<()> {
     // Rust programs ignore SIGPIPE by default, so a write to a closed pipe
     // returns EPIPE and `println!` panics. Restore the default handler so the
     // OS kills the process cleanly instead (matches the behaviour users expect
@@ -329,6 +353,7 @@ fn main() -> Result<()> {
             no_mtime,
             skip_bad_chunks,
             verbose,
+            strict,
             paths,
         } => cmd_extract::run(
             &file,
@@ -339,6 +364,7 @@ fn main() -> Result<()> {
                 includes: paths,
                 restore_mtime: !no_mtime,
                 skip_bad_chunks,
+                strict,
             },
             verbose,
         ),

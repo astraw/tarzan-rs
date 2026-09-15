@@ -368,19 +368,51 @@ tarzan extract -f archive.tar.zst --no-mtime
 # Survive bit-rot: log and skip members whose data won't decompress,
 # rather than aborting the whole extraction
 tarzan extract -f archive.tar.zst --skip-bad-chunks
+
+# Fail (exit status 2) if anything could not be restored exactly
+tarzan extract -f archive.tar.zst --strict
 ```
 
-Restored on extract: file contents, directory hierarchy, Unix permission
-bits, symlinks (Unix only), hard links, xattrs from PAX records (Unix only),
-and mtime on files, symlinks, and
-directories. Directory mtimes are applied in a deferred pass after all
-children are written, so creating a child doesn't bump the parent's
-timestamp back; hard links are likewise reconstructed in a second pass
-once their target file is on disk. If a hard link's target member is not
-part of the extraction — for example a path filter selects the link but
-not its target — the link is skipped with a warning. `--no-mtime` skips
-timestamp restoration entirely. Character/block devices and FIFOs are
-still skipped with a warning.
+#### What is restored, what is reported
+
+Extraction guarantees content and attempts metadata. A regular file either
+lands byte-exact or, with `--skip-bad-chunks`, is removed and reported;
+nothing is ever left at a member's path that is not that member. Everything
+else that can fail for reasons outside the archive is recorded and
+extraction continues:
+
+| Recorded in the archive | On extract | If it cannot be applied |
+|---|---|---|
+| file content, directory tree | always restored | hard error |
+| mtime (with nanoseconds where recorded) | restored on files, symlinks, directories | reported (`timestamps`) |
+| Unix permission bits | restored (Unix) | reported (`permission bits`); silently dropped on Windows |
+| xattrs from PAX records | restored (Unix) | reported (`xattrs`), e.g. a `com.apple.*` name on Linux |
+| symlinks | restored (Unix) | reported (`symlinks`); always on Windows |
+| hard links | reconstructed once the target exists | reported (`hard links`) when the target was filtered out |
+| device nodes, FIFOs | never created | reported (`device nodes`, `fifos`) |
+| sparse and vendor-specific entries | never created | reported (`unsupported entries`) |
+| ownership (uid/gid) | not restored | not reported |
+
+When anything was not restored, `extract` prints one summary block to
+stderr and still exits 0:
+
+```text
+extracted 1847 members; 1 not written, 3 metadata items not restored:
+  symlinks: 1 (./bin/current: symlinks are not supported on this platform)
+  xattrs: 3 (./a: com.apple.provenance: Operation not permitted; ./b: ...)
+```
+
+`-v` lists every affected path instead of the first few per kind. `--strict`
+turns a non-empty summary into exit status 2 (1 remains a hard failure such
+as an unreadable archive), after the whole tree has been extracted as far as
+possible. Use it when a restore must be exact or not count as a restore.
+
+Metadata is applied per member as content, then xattrs, then permission bits,
+then timestamps; xattrs come before mode because a read-only mode would
+forbid setting them. Hard links are created in a second pass once every
+regular file exists, and directory timestamps in a final pass, since writing
+children bumps a directory's mtime. `--no-mtime` skips timestamp restoration
+entirely.
 
 For macOS-created archives, length-delimited binary PAX values are supported;
 `LIBARCHIVE.xattr.*` values are base64-decoded, while raw
@@ -389,9 +421,9 @@ attribute. AppleDouble `._*` companions are preserved and indexed as ordinary
 members, but tarzan does not apply their Finder metadata or resource-fork
 semantics to the paired file.
 
-For workflows that need full fidelity — device files, FIFOs, ACLs,
-sparse files, or native AppleDouble/resource-fork handling — fall back to
-standard tooling. Every tarzan archive is a valid zstd stream:
+For workflows that need what `tarzan extract` reports rather than restores
+— device files, FIFOs, ACLs, sparse files, or native AppleDouble and
+resource-fork handling — fall back to standard tooling. Every tarzan archive is a valid zstd stream:
 
 ```sh
 zstd -d archive.tar.zst | tar x

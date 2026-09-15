@@ -217,7 +217,7 @@ mod reader;
 mod wrap;
 mod zstd_impl;
 
-pub use crate::extract::ExtractOptions;
+pub use crate::extract::{ExtractOptions, FidelityReport, Loss, LossKind, StrictFidelityError};
 pub use crate::filter::PathFilter;
 pub use crate::reader::{TarzanReader, VerifyRecord, VerifyStatus};
 pub use crate::wrap::{WrapOptions, wrap, wrap_with};

@@ -1,3 +1,4 @@
+use std::fmt;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
@@ -32,6 +33,10 @@ pub struct ExtractOptions {
     /// a warning and continue with the remaining members rather than
     /// aborting the whole extraction. Defaults to false.
     pub skip_bad_chunks: bool,
+    /// Treat any entry in the [`FidelityReport`] as a failure: extraction
+    /// still runs to completion, then returns a [`StrictFidelityError`]
+    /// carrying the report. Defaults to false.
+    pub strict: bool,
 }
 
 impl Default for ExtractOptions {
@@ -42,17 +47,221 @@ impl Default for ExtractOptions {
             includes: Vec::new(),
             restore_mtime: true,
             skip_bad_chunks: false,
+            strict: false,
         }
     }
 }
+
+/// Why a member, or one piece of its metadata, was not restored.
+///
+/// The variants fall into two groups. *Declines* mean nothing was written at
+/// the member's destination path: [`Symlink`](Self::Symlink) on a platform
+/// that cannot create one, [`HardLink`](Self::HardLink) whose target is
+/// missing, [`Device`](Self::Device), [`Fifo`](Self::Fifo),
+/// [`Unsupported`](Self::Unsupported) entry types, [`BadData`](Self::BadData)
+/// under `skip_bad_chunks`, [`NameCollision`](Self::NameCollision), and
+/// [`InvalidName`](Self::InvalidName). *Metadata losses* mean the member was
+/// written but one attribute could not be applied: [`Xattr`](Self::Xattr),
+/// [`Mode`](Self::Mode), [`Mtime`](Self::Mtime).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum LossKind {
+    /// An extended attribute could not be set.
+    Xattr,
+    /// Unix permission bits could not be applied.
+    Mode,
+    /// A timestamp could not be applied.
+    Mtime,
+    /// A symlink member could not be created.
+    Symlink,
+    /// A hard-link member could not be created.
+    HardLink,
+    /// A character or block device member was skipped.
+    Device,
+    /// A FIFO member was skipped.
+    Fifo,
+    /// An entry type tarzan does not materialise (sparse, vendor-specific)
+    /// was skipped.
+    Unsupported,
+    /// A regular file's data could not be read and the member was skipped
+    /// (`skip_bad_chunks`).
+    BadData,
+    /// The filesystem folded this member's name onto one already written by
+    /// this extraction (case-insensitive or normalisation-insensitive
+    /// filesystems); the member was skipped so the earlier one survives.
+    NameCollision,
+    /// The member's name cannot exist on this platform.
+    InvalidName,
+}
+
+impl LossKind {
+    /// Plural noun used in the summary block.
+    pub fn label(self) -> &'static str {
+        match self {
+            LossKind::Xattr => "xattrs",
+            LossKind::Mode => "permission bits",
+            LossKind::Mtime => "timestamps",
+            LossKind::Symlink => "symlinks",
+            LossKind::HardLink => "hard links",
+            LossKind::Device => "device nodes",
+            LossKind::Fifo => "fifos",
+            LossKind::Unsupported => "unsupported entries",
+            LossKind::BadData => "members with unreadable data",
+            LossKind::NameCollision => "name collisions",
+            LossKind::InvalidName => "invalid names",
+        }
+    }
+
+    /// True for kinds that mean the member was not written at all.
+    pub fn is_decline(self) -> bool {
+        !matches!(self, LossKind::Xattr | LossKind::Mode | LossKind::Mtime)
+    }
+}
+
+/// One thing that did not make it from the archive onto the filesystem.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Loss {
+    /// Archive path of the affected member.
+    pub path: String,
+    /// What was lost.
+    pub kind: LossKind,
+    /// Free-form detail: the attribute name, the OS error, the raw type byte.
+    pub detail: String,
+}
+
+/// What [`TarzanReader::extract_to_dir`] restored and what it could not.
+///
+/// Extraction guarantees content and attempts metadata; this is the record
+/// of the difference. An empty report ([`is_clean`](Self::is_clean)) means
+/// every selected member was written with every recorded attribute.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FidelityReport {
+    /// Members whose destination entry was created.
+    pub members_written: u64,
+    /// Members for which nothing was written at the destination path.
+    pub declined: Vec<Loss>,
+    /// Attributes that could not be applied to members that were written.
+    pub metadata_lost: Vec<Loss>,
+}
+
+/// How many affected paths the compact summary lists per kind before
+/// collapsing the rest into "and N more".
+const SUMMARY_EXAMPLES: usize = 5;
+
+impl FidelityReport {
+    /// True when nothing was declined and no metadata was lost.
+    pub fn is_clean(&self) -> bool {
+        self.declined.is_empty() && self.metadata_lost.is_empty()
+    }
+
+    /// Every loss, declines first.
+    pub fn losses(&self) -> impl Iterator<Item = &Loss> {
+        self.declined.iter().chain(self.metadata_lost.iter())
+    }
+
+    /// Multi-line summary grouped by kind, listing at most a few affected
+    /// paths per kind. Empty string when the report is clean.
+    pub fn summary(&self) -> String {
+        self.render(Some(SUMMARY_EXAMPLES))
+    }
+
+    /// Like [`summary`](Self::summary) but lists every affected path.
+    pub fn summary_full(&self) -> String {
+        self.render(None)
+    }
+
+    fn render(&self, cap: Option<usize>) -> String {
+        if self.is_clean() {
+            return String::new();
+        }
+        let mut out = format!(
+            "extracted {} member{}; {} not written, {} metadata item{} not restored:",
+            self.members_written,
+            plural(self.members_written),
+            self.declined.len(),
+            self.metadata_lost.len(),
+            plural(self.metadata_lost.len() as u64),
+        );
+        let mut kinds: Vec<LossKind> = self.losses().map(|l| l.kind).collect();
+        kinds.sort_unstable();
+        kinds.dedup();
+        for kind in kinds {
+            let items: Vec<&Loss> = self.losses().filter(|l| l.kind == kind).collect();
+            let shown = cap.map_or(items.len(), |c| c.min(items.len()));
+            let mut examples: Vec<String> = items[..shown]
+                .iter()
+                .map(|l| {
+                    if l.detail.is_empty() {
+                        l.path.clone()
+                    } else {
+                        format!("{}: {}", l.path, l.detail)
+                    }
+                })
+                .collect();
+            if shown < items.len() {
+                examples.push(format!("and {} more", items.len() - shown));
+            }
+            out.push_str(&format!(
+                "\n  {}: {} ({})",
+                kind.label(),
+                items.len(),
+                examples.join("; ")
+            ));
+        }
+        out
+    }
+
+    fn decline(&mut self, member_path: &str, kind: LossKind, detail: impl fmt::Display) {
+        let detail = detail.to_string();
+        warn!(path = %member_path, kind = kind.label(), %detail, "member not written");
+        self.declined.push(Loss {
+            path: member_path.to_owned(),
+            kind,
+            detail,
+        });
+    }
+
+    fn lose(&mut self, member_path: &str, kind: LossKind, detail: impl fmt::Display) {
+        let detail = detail.to_string();
+        warn!(path = %member_path, kind = kind.label(), %detail, "metadata not restored");
+        self.metadata_lost.push(Loss {
+            path: member_path.to_owned(),
+            kind,
+            detail,
+        });
+    }
+}
+
+fn plural(n: u64) -> &'static str {
+    if n == 1 { "" } else { "s" }
+}
+
+/// Returned by [`TarzanReader::extract_to_dir`] when
+/// [`ExtractOptions::strict`] is set and the report is not clean. The tree
+/// has still been extracted as far as possible; the error only changes the
+/// verdict.
+#[derive(Debug, Clone)]
+pub struct StrictFidelityError(pub FidelityReport);
+
+impl fmt::Display for StrictFidelityError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}\n--strict: treating the above as failure",
+            self.0.summary()
+        )
+    }
+}
+
+impl std::error::Error for StrictFidelityError {}
 
 /// Filesystem actions deferred to a second pass after the main walk:
 /// directory mtimes (children must be in place first) and hard links
 /// (their target file must be extracted first).
 #[derive(Default)]
 struct Deferred {
-    /// (directory path, atime to apply, mtime to apply)
-    dir_times: Vec<(PathBuf, FileTime, FileTime)>,
+    /// (member path for diagnostics, directory path, atime, mtime)
+    dir_times: Vec<(String, PathBuf, FileTime, FileTime)>,
     /// (member path for diagnostics, link source, link target)
     hard_links: Vec<(String, PathBuf, PathBuf)>,
 }
@@ -62,20 +271,37 @@ impl TarzanReader {
     ///
     /// Creates `dest` (and any missing parent directories) as needed.
     /// Refuses to extract members whose path is absolute or contains a
-    /// `..` component, to keep the result inside `dest`.
+    /// `..` component, to keep the result inside `dest`; that refusal is
+    /// an error, not a decline, because it is a safety boundary.
     ///
-    /// Hard links are reconstructed once their target file is on disk.
-    /// Character/block devices and FIFOs are skipped with a warning.
+    /// # Contract
     ///
-    /// `on_extracted` is invoked after each member is successfully
-    /// written, with the member's archive path. Useful for verbose
-    /// progress output.
+    /// Content is guaranteed, metadata is attempted, and the difference is
+    /// reported. A regular file either lands byte-exact or (with
+    /// `skip_bad_chunks`) is removed and declined; nothing is ever left at a
+    /// declined member's path. Everything else that can fail for reasons
+    /// outside the archive — an xattr namespace the host lacks, permission
+    /// bits on a filesystem without them, a symlink on a platform that
+    /// cannot create one — is recorded in the returned [`FidelityReport`]
+    /// and extraction continues. Hard I/O failures (cannot create a
+    /// directory or file, cannot write data) still abort with an error.
+    ///
+    /// # Order of application
+    ///
+    /// Per member: content, then extended attributes, then permission
+    /// bits, then timestamps. xattrs precede mode because a read-only mode
+    /// would forbid setting them. Hard links are created in a second pass
+    /// once every regular file exists; directory timestamps are applied in
+    /// a final pass, since creating children bumps a directory's mtime.
+    ///
+    /// `on_extracted` is invoked after each member is written, with the
+    /// member's archive path. Useful for verbose progress output.
     pub fn extract_to_dir<F>(
         &mut self,
         dest: &Path,
         opts: &ExtractOptions,
         mut on_extracted: F,
-    ) -> Result<()>
+    ) -> Result<FidelityReport>
     where
         F: FnMut(&str),
     {
@@ -86,6 +312,7 @@ impl TarzanReader {
             .with_context(|| format!("creating destination {}", dest.display()))?;
 
         let mut deferred = Deferred::default();
+        let mut report = FidelityReport::default();
 
         // Clone the member list so the loop can call `&mut self` methods
         // (extraction seeks the source) while iterating.
@@ -102,8 +329,10 @@ impl TarzanReader {
                 _ => continue,
             };
             let target = dest.join(&rel);
-            self.extract_one(member, &target, dest, opts, &mut deferred)?;
-            on_extracted(&member.path);
+            if self.extract_one(member, &target, dest, opts, &mut deferred, &mut report)? {
+                report.members_written += 1;
+                on_extracted(&member.path);
+            }
         }
 
         // Hard links: every regular file is on disk now, so their targets
@@ -115,34 +344,45 @@ impl TarzanReader {
                     .with_context(|| format!("creating {}", parent.display()))?;
             }
             if !source.exists() {
-                warn!(
-                    path = %member_path,
-                    source = %source.display(),
-                    "hard-link target was not extracted; skipping"
+                report.decline(
+                    &member_path,
+                    LossKind::HardLink,
+                    format!("target {} was not extracted", source.display()),
                 );
                 continue;
             }
             // Replace any existing entry so hard_link does not fail with EEXIST.
             let _ = fs::remove_file(&target);
-            fs::hard_link(&source, &target).with_context(|| {
-                format!(
-                    "creating hard link {} -> {}",
-                    target.display(),
-                    source.display()
-                )
-            })?;
+            match fs::hard_link(&source, &target) {
+                Ok(()) => {
+                    report.members_written += 1;
+                    on_extracted(&member_path);
+                }
+                Err(error) => report.decline(
+                    &member_path,
+                    LossKind::HardLink,
+                    format!("linking to {}: {error}", source.display()),
+                ),
+            }
         }
 
         // Directory mtimes last: writing children (files, subdirs, hard
         // links) bumps the parent's mtime back to "now".
-        for (path, atime, mtime) in deferred.dir_times {
-            filetime::set_file_times(&path, atime, mtime)
-                .with_context(|| format!("setting file times on directory {}", path.display()))?;
+        for (member_path, path, atime, mtime) in deferred.dir_times {
+            if let Err(error) = filetime::set_file_times(&path, atime, mtime) {
+                report.lose(&member_path, LossKind::Mtime, error);
+            }
         }
 
-        Ok(())
+        if opts.strict && !report.is_clean() {
+            return Err(StrictFidelityError(report).into());
+        }
+        Ok(report)
     }
 
+    /// Writes one member. Returns `Ok(true)` if an entry was created at
+    /// `target`, `Ok(false)` if the member was declined (and recorded in
+    /// `report`) or queued for the hard-link pass.
     fn extract_one(
         &mut self,
         member: &TocMember,
@@ -150,7 +390,8 @@ impl TarzanReader {
         dest: &Path,
         opts: &ExtractOptions,
         deferred: &mut Deferred,
-    ) -> Result<()> {
+        report: &mut FidelityReport,
+    ) -> Result<bool> {
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         }
@@ -160,13 +401,17 @@ impl TarzanReader {
             EntryType::Dir => {
                 fs::create_dir_all(target)
                     .with_context(|| format!("creating dir {}", target.display()))?;
-                set_unix_mode(target, member.mode)?;
-                apply_member_xattrs(target, member);
+                apply_member_xattrs(target, member, report);
+                apply_mode(target, member, report);
                 if opts.restore_mtime {
-                    deferred
-                        .dir_times
-                        .push((target.to_path_buf(), atime, mtime));
+                    deferred.dir_times.push((
+                        member.path.clone(),
+                        target.to_path_buf(),
+                        atime,
+                        mtime,
+                    ));
                 }
+                Ok(true)
             }
             EntryType::File => {
                 let file = File::create(target)
@@ -175,41 +420,51 @@ impl TarzanReader {
                 match self.extract_member(&member.path, &mut writer) {
                     Ok(()) => {
                         writer.flush()?;
-                        set_unix_mode(target, member.mode)?;
-                        apply_member_xattrs(target, member);
-                        if opts.restore_mtime {
-                            filetime::set_file_times(target, atime, mtime).with_context(|| {
-                                format!("setting file times on {}", target.display())
-                            })?;
+                        apply_member_xattrs(target, member, report);
+                        apply_mode(target, member, report);
+                        if opts.restore_mtime
+                            && let Err(error) = filetime::set_file_times(target, atime, mtime)
+                        {
+                            report.lose(&member.path, LossKind::Mtime, error);
                         }
+                        Ok(true)
                     }
                     Err(err) if opts.skip_bad_chunks => {
                         // Drop the writer first so the partial file is closed
                         // before we remove it.
                         drop(writer);
                         let _ = fs::remove_file(target);
-                        warn!(
-                            path = %member.path,
-                            error = format!("{err:#}"),
-                            "skipping member with unreadable data (--skip-bad-chunks)"
-                        );
+                        report.decline(&member.path, LossKind::BadData, format!("{err:#}"));
+                        Ok(false)
                     }
-                    Err(err) => return Err(err),
+                    Err(err) => Err(err),
                 }
             }
             EntryType::Symlink => {
-                create_member_symlink(member, target)?;
-                if opts.restore_mtime {
-                    filetime::set_symlink_file_times(target, atime, mtime).with_context(|| {
-                        format!("setting mtime on symlink {}", target.display())
-                    })?;
+                // Replace any existing entry so symlink does not fail with EEXIST.
+                let _ = fs::remove_file(target);
+                match create_member_symlink(member, target) {
+                    Ok(()) => {
+                        if opts.restore_mtime
+                            && let Err(error) =
+                                filetime::set_symlink_file_times(target, atime, mtime)
+                        {
+                            report.lose(&member.path, LossKind::Mtime, error);
+                        }
+                        Ok(true)
+                    }
+                    Err(error) => {
+                        report.decline(&member.path, LossKind::Symlink, format!("{error:#}"));
+                        Ok(false)
+                    }
                 }
             }
             EntryType::HardLink => {
                 // The link's target is another member, by archive path.
                 // Defer creation until that file has been written; no
                 // mtime fixup — a hard link shares the target's inode,
-                // which already carries the right timestamp.
+                // which already carries the right timestamp. Counted as
+                // written when the second pass succeeds.
                 match member_link_target_relative_path(member, opts.strip_components)? {
                     Some(src_rel) if !src_rel.as_os_str().is_empty() => {
                         deferred.hard_links.push((
@@ -218,27 +473,31 @@ impl TarzanReader {
                             target.to_path_buf(),
                         ));
                     }
-                    _ => warn!(
-                        path = %member.path,
-                        "hard-link target stripped away; skipping"
+                    _ => report.decline(
+                        &member.path,
+                        LossKind::HardLink,
+                        "target path stripped away by --strip-components",
                     ),
                 }
+                Ok(false)
             }
-            EntryType::CharDevice | EntryType::BlockDevice | EntryType::Fifo | EntryType::Other => {
-                if matches!(member.entry_type, EntryType::Other)
-                    && let Some(raw) = member.raw_type_byte
-                {
-                    warn!(
-                        path = %member.path,
-                        raw_type = format!("{} (0x{raw:02x})", raw as char),
-                        "skipping unsupported entry type"
-                    );
-                } else {
-                    warn!(path = %member.path, "skipping unsupported entry type");
-                }
+            EntryType::CharDevice | EntryType::BlockDevice => {
+                report.decline(&member.path, LossKind::Device, "not materialised");
+                Ok(false)
+            }
+            EntryType::Fifo => {
+                report.decline(&member.path, LossKind::Fifo, "not materialised");
+                Ok(false)
+            }
+            EntryType::Other => {
+                let detail = match member.raw_type_byte {
+                    Some(raw) => format!("tar type '{}' (0x{raw:02x})", raw as char),
+                    None => "unknown tar type".to_owned(),
+                };
+                report.decline(&member.path, LossKind::Unsupported, detail);
+                Ok(false)
             }
         }
-        Ok(())
     }
 }
 
@@ -295,27 +554,41 @@ fn member_atime(member: &TocMember, fallback: FileTime) -> FileTime {
 /// Attributes are host-specific metadata: a `com.apple.*` name from a macOS
 /// archive is not a valid namespace on Linux, macOS refuses to set some
 /// system-managed attributes, and many filesystems do not support xattrs at
-/// all. The file's contents, mode, and timestamps are already correct by the
-/// time this runs, so a failure here is reported as a warning and extraction
-/// continues, matching what GNU tar and bsdtar do.
+/// all. Each failure is recorded as a [`LossKind::Xattr`] loss and
+/// extraction continues, matching what GNU tar and bsdtar do.
 #[cfg(unix)]
-fn apply_member_xattrs(target: &Path, member: &TocMember) {
+fn apply_member_xattrs(target: &Path, member: &TocMember, report: &mut FidelityReport) {
     if let Some(xattrs) = &member.xattrs {
         for (name, value) in xattrs {
             if let Err(error) = xattr::set(target, name, value) {
-                warn!(
-                    path = %target.display(),
-                    xattr = %name,
-                    %error,
-                    "could not restore extended attribute; continuing"
-                );
+                report.lose(&member.path, LossKind::Xattr, format!("{name}: {error}"));
             }
         }
     }
 }
 
+/// Windows has no xattrs. Recorded attributes are dropped without a
+/// per-member report entry, since every member would carry the same note;
+/// the README documents the limitation.
 #[cfg(not(unix))]
-fn apply_member_xattrs(_target: &Path, _member: &TocMember) {}
+fn apply_member_xattrs(_target: &Path, _member: &TocMember, _report: &mut FidelityReport) {}
+
+/// Applies the member's Unix permission bits, recording a
+/// [`LossKind::Mode`] loss on failure.
+#[cfg(unix)]
+fn apply_mode(target: &Path, member: &TocMember, report: &mut FidelityReport) {
+    use std::os::unix::fs::PermissionsExt;
+    // Mask to the standard 12 bits; ignore high bits that may encode entry type.
+    let perms = fs::Permissions::from_mode(member.mode & 0o7777);
+    if let Err(error) = fs::set_permissions(target, perms) {
+        report.lose(&member.path, LossKind::Mode, error);
+    }
+}
+
+/// Unix permission bits have no equivalent on this platform; not reported,
+/// for the same reason as xattrs.
+#[cfg(not(unix))]
+fn apply_mode(_target: &Path, _member: &TocMember, _report: &mut FidelityReport) {}
 
 fn normalize_member_path(p: &str, strip: usize) -> Result<Option<PathBuf>> {
     if p.starts_with('/') {
@@ -363,28 +636,6 @@ fn normalize_member_path_bytes(raw: &[u8], strip: usize) -> Result<Option<PathBu
 }
 
 #[cfg(unix)]
-fn set_unix_mode(target: &Path, mode: u32) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    // Mask to the standard 12 bits; ignore high bits that may encode entry type.
-    let perms = fs::Permissions::from_mode(mode & 0o7777);
-    fs::set_permissions(target, perms)
-        .with_context(|| format!("setting mode on {}", target.display()))?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn set_unix_mode(_target: &Path, _mode: u32) -> Result<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn create_symlink(link_target: &str, target: &Path) -> Result<()> {
-    std::os::unix::fs::symlink(link_target, target)
-        .with_context(|| format!("creating symlink {}", target.display()))?;
-    Ok(())
-}
-
-#[cfg(unix)]
 fn create_member_symlink(member: &TocMember, target: &Path) -> Result<()> {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
@@ -398,24 +649,14 @@ fn create_member_symlink(member: &TocMember, target: &Path) -> Result<()> {
         .link_target
         .as_deref()
         .ok_or_else(|| anyhow!("symlink {} has no link_target", member.path))?;
-    create_symlink(link_target, target)
+    std::os::unix::fs::symlink(link_target, target)
+        .with_context(|| format!("creating symlink {}", target.display()))?;
+    Ok(())
 }
 
 #[cfg(not(unix))]
-fn create_symlink(_link_target: &str, target: &Path) -> Result<()> {
-    bail!(
-        "symlinks not supported on this platform ({})",
-        target.display()
-    )
-}
-
-#[cfg(not(unix))]
-fn create_member_symlink(member: &TocMember, target: &Path) -> Result<()> {
-    let link_target = member
-        .link_target
-        .as_deref()
-        .ok_or_else(|| anyhow!("symlink {} has no link_target", member.path))?;
-    create_symlink(link_target, target)
+fn create_member_symlink(_member: &TocMember, _target: &Path) -> Result<()> {
+    bail!("symlinks are not supported on this platform")
 }
 
 #[cfg(test)]
@@ -465,5 +706,77 @@ mod tests {
         let compiled = compile_patterns(&raw).unwrap();
         assert!(member_excluded("data/numbers.csv", &compiled));
         assert!(!member_excluded("data/blob.bin", &compiled));
+    }
+
+    fn loss(path: &str, kind: LossKind, detail: &str) -> Loss {
+        Loss {
+            path: path.to_owned(),
+            kind,
+            detail: detail.to_owned(),
+        }
+    }
+
+    #[test]
+    fn clean_report_renders_empty() {
+        let report = FidelityReport {
+            members_written: 3,
+            ..Default::default()
+        };
+        assert!(report.is_clean());
+        assert_eq!(report.summary(), "");
+    }
+
+    #[test]
+    fn summary_groups_by_kind_and_caps_examples() {
+        let mut report = FidelityReport {
+            members_written: 10,
+            ..Default::default()
+        };
+        for i in 0..7 {
+            report
+                .metadata_lost
+                .push(loss(&format!("./f{i}"), LossKind::Xattr, "user.k: EPERM"));
+        }
+        report
+            .declined
+            .push(loss("./dev/null", LossKind::Device, "not materialised"));
+
+        let s = report.summary();
+        assert!(
+            s.starts_with("extracted 10 members; 1 not written, 7 metadata items not restored:"),
+            "{s}"
+        );
+        assert!(
+            s.contains("\n  device nodes: 1 (./dev/null: not materialised)"),
+            "{s}"
+        );
+        assert!(s.contains("\n  xattrs: 7 ("), "{s}");
+        assert!(s.contains("./f4: user.k: EPERM; and 2 more)"), "{s}");
+        assert!(
+            !s.contains("./f5"),
+            "capped summary must not list ./f5: {s}"
+        );
+
+        let full = report.summary_full();
+        assert!(full.contains("./f6"), "{full}");
+        assert!(!full.contains("and 2 more"), "{full}");
+    }
+
+    #[test]
+    fn strict_error_carries_summary() {
+        let mut report = FidelityReport::default();
+        report
+            .declined
+            .push(loss("./link", LossKind::Symlink, "not supported"));
+        let err = StrictFidelityError(report);
+        let text = err.to_string();
+        assert!(
+            text.contains("symlinks: 1 (./link: not supported)"),
+            "{text}"
+        );
+        assert!(
+            text.ends_with("--strict: treating the above as failure"),
+            "{text}"
+        );
     }
 }
