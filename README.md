@@ -492,8 +492,9 @@ total number of regular files; an archive wrapped with `--disable-md5` shows
 `content_md5:     absent`.
 
 With `--json`, the same data is emitted as an object (`ratio` and
-`avg_chunk_size_bytes` are `null` for an empty archive; `format_version`
-and `identity_version` are the same value, kept for compatibility):
+`avg_chunk_size_bytes` are `null` for an empty archive). `format_version`
+and `identity_version` are two names for the identity frame's version byte;
+both are kept so existing consumers of either keep working:
 
 ```json
 {
@@ -555,6 +556,42 @@ original) but doesn't, by itself, detect every kind of zstd-level
 corruption — zstd's own per-frame checksum only fires during
 decompression. Full verify catches per-file mismatches at the cost of
 decompressing every frame.
+
+---
+
+## Compatibility
+
+The archive format is versioned by the identity frame's version byte, `2`
+since tarzan 0.2.0. Within that version:
+
+- **Backward compatibility is promised.** Every archive written by any
+  tarzan release from 0.2.0 on opens, lists, extracts, and verifies in every
+  later release. The TOC schema only ever gains optional fields; nothing is
+  removed, renamed, or made required. `testdata/compat/` holds an archive
+  from every published release and CI proves this on each push.
+- **Forward compatibility is not promised, but it is tested.** An archive
+  from a newer release opens in an older one today, because readers ignore
+  JSON fields they do not know. A change that stops that (a new `type`
+  value, a new required field) fails a CI job in which the first and the
+  latest published releases read an archive from the current build, so it
+  can only land knowingly. Details of what old readers tolerate and where
+  they stop are in `tests/forward_compat.rs`.
+- **Standard tools always work.** The container uses nothing outside RFC
+  8878 — no dictionaries, no experimental frame features — so `zstd -d`
+  plus any tar recovers the original stream from any tarzan archive, of any
+  version, forever.
+- **Not promised: identical bytes across releases.** The zstd library
+  changes between releases, so wrapping the same tar with two tarzan
+  versions yields different compressed bytes with identical metadata and
+  identical decoded output. Do not deduplicate or fingerprint archives across
+  releases. Within one release and one set of options, output is
+  deterministic.
+- **Legacy 0.1.x archives** (identity version 1) are not readable and never
+  will be; `zstd -d archive.tar.zst | tar x` recovers them.
+
+The version numbers involved, the hash algorithms that are fixed for the
+life of v2, reader limits, and guidance for third-party readers are
+specified in the [crate documentation](https://docs.rs/tarzan).
 
 ---
 
@@ -792,6 +829,9 @@ contributing model in its subject line.
   OS lists, verifies, and extracts every producer's archive, checking that
   content lands byte-exact and that what could not be restored is only what
   the extract contract predicts
+- A forward-compatibility probe in which the first and the latest published
+  releases, installed from crates.io, read an archive written by the current
+  build
 - CI that runs the suite on Linux, macOS, and Windows on every push; the macOS
   job also wraps, lists, verifies, and extracts an archive produced by the host
   bsdtar with its default flags (AppleDouble companions, binary PAX xattrs,

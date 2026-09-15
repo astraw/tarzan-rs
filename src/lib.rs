@@ -14,12 +14,16 @@
 //! # AI-assisted development
 //!
 //! This crate was developed with substantial AI assistance. The implementation
-//! was generated iteratively using Claude language models (Anthropic) — primarily
-//! Claude Opus 4.7 and Claude Sonnet 4.6, with a small number of early commits
-//! from Gemma 4 31B — under continuous human direction and review. Every commit
+//! was generated iteratively using large language models — primarily Claude
+//! Opus 4.7, Claude Sonnet 4.6, and Claude Fable 5.1 (Anthropic) and GPT-5.3,
+//! 5.4, and 5.5 Codex (OpenAI), with a small number of early commits from Gemma
+//! 4 31B (Google) — under continuous human direction and review. Every commit
 //! records the contributing model in the subject line. Correctness is validated
-//! through the test suite (`cargo test`), CI on Linux, macOS, and Windows, and
-//! iterative round-trip testing against real archives during development.
+//! through the test suite (`cargo test`), CI on Linux, macOS, and Windows
+//! (including archives produced by each host's own `tar` and consumed on every
+//! other host, archives from every published release, and old releases reading
+//! archives from the current build), and iterative round-trip testing against
+//! real archives during development.
 //!
 //! # File format
 //!
@@ -120,10 +124,18 @@
 //! }
 //! ```
 //!
-//! Writers keep `tarzan_version` at 2. New metadata is additive and optional:
-//! fields such as `mtime_ns`, `atime`/`atime_ns`, `ctime`/`ctime_ns`,
-//! `uname`, `gname`, `xattrs`, `path_bytes`, `link_target_bytes`, and
-//! `raw_type_byte` may appear when present in the source tar metadata.
+//! `tarzan_version` mirrors the identity frame's version byte and readers
+//! require the two to agree. New metadata is additive and optional: fields
+//! such as `mtime_ns`, `atime`/`atime_ns`, `ctime`/`ctime_ns`, `uname`,
+//! `gname`, `xattrs`, `path_bytes`, `link_target_bytes`, and `raw_type_byte`
+//! appear when the source tar carried them and are absent otherwise.
+//!
+//! Guidance for third-party readers: prefer `path_bytes` and
+//! `link_target_bytes` over the lossy `path`/`link_target` strings when
+//! present; treat a chunk with `frame_offset` as a slice of a frame shared
+//! with neighbouring members; never assume `content_sha256` or `content_md5`
+//! is present on a member because another member carries it; and treat any
+//! `type` value you do not recognise as `other`.
 //!
 //! Each chunk locates one member's bytes inside a compressed frame.  A member
 //! larger than the chunk size spans several chunks; small members are packed
@@ -145,6 +157,50 @@
 //! The decompressed tar stream is bit-for-bit identical to the original.
 //! What is lost is the index: listing or extracting via standard tools
 //! requires a full sequential pass.
+//!
+//! # Compatibility
+//!
+//! Four version numbers appear in an archive:
+//!
+//! | Where | Value | Reader behaviour |
+//! |---|---|---|
+//! | identity frame version byte (offset 13) | `2` | the format version; `1` is rejected as legacy, anything else as unsupported |
+//! | `tarzan_version` in the TOC JSON | `2` | must equal the identity byte |
+//! | TOC frame payload version byte | `1` | the JSON envelope; anything else is rejected |
+//! | footer frame version byte | `1` | the footer layout; anything else is rejected |
+//!
+//! Within identity version 2, which every release since 0.2.0 writes:
+//!
+//! - **Backward compatibility is promised.** Any v2 archive opens, lists,
+//!   extracts, and verifies in every later release. The TOC schema only gains
+//!   optional fields; nothing is removed, renamed, or made required.
+//! - **Forward compatibility is not promised but is tested.** Readers ignore
+//!   unknown JSON fields at every level, so an archive from a newer release
+//!   opens in an older one as long as the newer writer only added fields.
+//!   The known break points are a `type` value the reader has never seen
+//!   (the whole TOC fails to decode) and any change to the version bytes.
+//!   CI checks that the first and the latest published releases read an
+//!   archive from the current build; a change that breaks them lands
+//!   knowingly.
+//! - **Fixed for the life of v2:** the frame layout above, little-endian
+//!   integers, zstd's per-frame XXHash64 content checksum, `content_sha256`
+//!   and `content_md5` over content bytes only, and the footer XXHash64
+//!   seeded with [`format::footer::ARCHIVE_HASH_SEED`]. Changing any of
+//!   these means a new identity version.
+//! - **Standard tools always work.** No dictionaries and no experimental
+//!   frame features are used, so any RFC 8878 decoder plus any tar recovers
+//!   the original stream from any tarzan archive, forever.
+//! - **Not promised: identical bytes across releases.** The zstd library
+//!   version changes the compressed bytes. Two releases wrapping the same tar
+//!   with the same options produce different archives with identical
+//!   metadata and identical decoded output. Within one release and one set
+//!   of options, output is deterministic.
+//!
+//! Limits: the compressed TOC must fit a skippable frame (under 4 GiB), which
+//! is a format limit; this reader additionally refuses a TOC that
+//! decompresses to more than [`format::toc::MAX_TOC_DECOMPRESSED_BYTES`]
+//! (1 GiB, roughly four million members), which is a reader safety limit
+//! and not a property of the archive.
 //!
 //! # Usage
 //!
@@ -201,6 +257,29 @@
 //! let mut reader = TarzanReader::open(Path::new("archive.tar.zst"))?;
 //! let mut out = std::fs::File::create("main.rs")?;
 //! reader.extract_member("src/main.rs", &mut out)?;
+//! # Ok::<(), anyhow::Error>(())
+//! ```
+//!
+//! ## Extracting to a directory
+//!
+//! [`TarzanReader::extract_to_dir`] materialises members on the filesystem
+//! under the contract *content is guaranteed, metadata is attempted, and the
+//! difference is reported*: a regular file either lands byte-exact or is
+//! declined, and every attribute the host could not apply (an xattr
+//! namespace it lacks, a symlink it cannot create, a name the filesystem
+//! folds onto another) is recorded in the returned [`FidelityReport`] while
+//! extraction continues. [`ExtractOptions::strict`] turns a non-empty report
+//! into a [`StrictFidelityError`] after the tree has been extracted as far as
+//! possible.
+//!
+//! ```no_run
+//! # use std::path::Path;
+//! # use tarzan::{ExtractOptions, TarzanReader};
+//! let mut reader = TarzanReader::open(Path::new("archive.tar.zst"))?;
+//! let report = reader.extract_to_dir(Path::new("out"), &ExtractOptions::default(), |_| {})?;
+//! if !report.is_clean() {
+//!     eprintln!("{}", report.summary());
+//! }
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 //!
