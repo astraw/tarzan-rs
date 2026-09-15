@@ -11,9 +11,7 @@
 are fully seekable and self-indexed. It divides the archive into independently
 compressed chunks — with chunk boundaries and size tunable to balance compression ratio
 against random-access granularity — and embeds a table of contents (TOC) directly
-inside the compressed stream as a zstd skippable frame. The underlying tar data is
-preserved bit-for-bit; the archive can be decompressed by standard zstd tools, though
-doing so discards the indexing and seekability that tarzan provides.
+inside the compressed stream as a zstd skippable frame.
 
 ```sh
 # Wrap any existing tar stream — drop-in for gzip or zstd
@@ -30,6 +28,28 @@ The CLI follows tar's flag conventions where they overlap: `-f`/`--file`
 names the archive, `-v` is verbose, `-C` selects a directory. Subcommands
 have tar-style short aliases (`tarzan t` for `list`). See [What we don't
 copy from tar](#what-we-dont-copy-from-tar) for the bits we leave behind.
+
+**The container is plain Zstandard.** A tarzan archive is a conforming
+Zstandard stream as specified in [RFC 8878](https://www.rfc-editor.org/rfc/rfc8878):
+a sequence of independent compressed frames, each carrying zstd's own content
+checksum, interleaved with skippable frames that hold tarzan's identity
+marker, table of contents, and footer. tarzan adds nothing outside what the
+zstd format already defines; concatenated frames and skippable frames are
+both part of the specification, so any conforming decoder reproduces the
+original tar stream from the data frames alone. If you do not need
+tarzan's indexing or random access, `zstd -d archive.tar.zst | tar x` (or
+`tar --zstd -xf`) recovers the original tar stream exactly, with no tarzan
+software involved.
+
+**The payload is untouched tar.** tarzan does not write tar; it wraps
+the stream that `tar -c` (GNU tar, bsdtar, `git archive`, ...) already
+produced and preserves it byte-for-byte, headers and padding included. To
+build the index it parses the ustar, GNU, and PAX header dialects, including
+long-name and long-link records, PAX local and global extension headers with
+binary values, and sparse-file encodings, but it never rewrites any of them.
+Whatever tarzan does not interpret (device nodes, ACLs, vendor-specific PAX
+keys, AppleDouble companions) is therefore still present for a native tar
+extractor after decompression, with exactly the semantics that tar gave it.
 
 ---
 
@@ -152,6 +172,9 @@ ssh user@host "tar -cf - /data" | tarzan wrap -f backup.tar.zst
 
 # Verbose: list each member to stderr as it is wrapped
 tar -cf - ./dir | tarzan wrap -v -f archive.tar.zst
+
+# fsync the finished archive and its directory before returning
+tar -cf - ./dir | tarzan wrap --sync -f archive.tar.zst
 ```
 
 For safety, `wrap` refuses to write the binary archive directly to a
@@ -160,6 +183,11 @@ the output, redirect to a file, or pass `-f`.
 
 By default `wrap` computes both `content_sha256` and `content_md5` for regular
 files. Use `--disable-sha256` and/or `--disable-md5` to skip one or both.
+
+`wrap` writes to a temporary file and renames it into place, so a failed or
+interrupted run never leaves a partial archive at the output path. `--sync`
+additionally fsyncs the file before the rename and the directory after it,
+for workflows where durability across a crash matters more than speed.
 
 ### Creating archives from files
 
@@ -179,12 +207,6 @@ tar -cf - -C ./build . | tarzan wrap -f build.tar.zst
 # Exclude patterns (tar's own --exclude)
 tar -cf - --exclude='*.o' --exclude='target/*' ./my-project \
     | tarzan wrap -f archive.tar.zst
-
-# git archive integration
-git archive HEAD | tarzan wrap -f release.tar.zst
-
-# Remote backup
-ssh user@host "tar -cf - /data" | tarzan wrap -f backup.tar.zst
 ```
 
 This composition is deliberate: real tar handles hard links, sparse
@@ -192,11 +214,6 @@ files, xattrs, ACLs, long path/link names (PAX/GNU extensions), and
 device files correctly. Re-implementing that surface inside tarzan would
 either replicate tar poorly or shell out to it anyway, so we lean on
 the canonical `tar | tarzan wrap` pipeline instead.
-
-`wrap` parses the tar structure needed for indexing, including GNU and PAX
-extension records, but preserves the input bytes verbatim. Vendor-specific
-metadata that tarzan does not interpret therefore remains available to a
-native tar extractor after decompression.
 
 ### `tarzan list` — list contents
 
@@ -420,25 +437,35 @@ Uncompressed:    2.3 GB
 Ratio:           21.1% (archive / uncompressed)
 Data frames:     486.4 MB (sum of compressed frames)
 Members:         1847
+content_sha256:  present (1602/1602)
+content_md5:     present (1602/1602)
 Chunks:          4203
 Avg chunk size:  574.5 KB (uncompressed)
 Identity frame:  TRZN v2
 TOC frame:       312.0 KB at offset 487204816
 ```
 
+The two checksum lines count regular files carrying each field against the
+total number of regular files; an archive wrapped with `--disable-md5` shows
+`content_md5:     absent`.
+
 With `--json`, the same data is emitted as an object (`ratio` and
-`avg_chunk_size_bytes` are `null` for an empty archive):
+`avg_chunk_size_bytes` are `null` for an empty archive; `format_version`
+and `identity_version` are the same value, kept for compatibility):
 
 ```json
 {
-  "format_version": 1,
-  "identity_version": 1,
+  "format_version": 2,
+  "identity_version": 2,
   "file": "archive.tar.zst",
   "size_bytes": 510656512,
   "uncompressed_bytes": 2480619520,
   "data_frame_bytes": 509939712,
   "ratio": 0.2058,
   "members": 1847,
+  "regular_files": 1602,
+  "content_sha256_count": 1602,
+  "content_md5_count": 1602,
   "chunks": 4203,
   "avg_chunk_size_bytes": 590201,
   "toc_offset": 487204816,
@@ -446,10 +473,9 @@ With `--json`, the same data is emitted as an object (`ratio` and
 }
 ```
 
-Some fields the legacy README example referenced are intentionally
-omitted: the archive does not record a creation timestamp, and the
-chunk-size argument is a wrap-time tunable rather than archive metadata
-(use `Avg chunk size` as an observed proxy).
+The archive does not record a creation timestamp, and the chunk size is a
+wrap-time tunable rather than archive metadata; `Avg chunk size` is the
+observed proxy.
 
 ### `tarzan verify` — verify checksums
 
@@ -607,7 +633,7 @@ tools. Add it to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-tarzan = "0.2"
+tarzan = "0.5"
 ```
 
 The crate has no Cargo features. Compression is provided by the
@@ -707,27 +733,33 @@ what is there).
 ## AI-assisted development
 
 `tarzan` was developed with substantial AI assistance. The implementation was
-generated iteratively using large language models — primarily Claude Opus 4.7 and
-Claude Sonnet 4.6 (Anthropic), with a small number of early commits from Gemma 4
-31B (Google) — under continuous direction and review by the human author. Every
-commit records the contributing model in its subject line.
+generated iteratively using large language models — primarily Claude Opus 4.7,
+Claude Sonnet 4.6, and Claude Fable 5.1 (Anthropic) and GPT-5.3/5.4/5.5 Codex
+(OpenAI), with a small number of early commits from Gemma 4 31B (Google) — under
+continuous direction and review by the human author. Every commit records the
+contributing model in its subject line.
 
 **Validation.** Correctness is validated through:
 
 - An automated test suite (`cargo test`) covering wrapping, listing, extracting,
   verifying, error paths, and round-trip integrity
-- CI that runs tests on Linux, macOS, and Windows on every push
+- CI that runs the suite on Linux and macOS on every push; the macOS job also
+  wraps, lists, verifies, and extracts an archive produced by the host bsdtar
+  with its default flags (AppleDouble companions, binary PAX xattrs,
+  sub-second mtimes)
 - Iterative testing against real tar archives during development, with the human
   author reviewing each change before it was committed
 
 **Known gaps.** Coverage is thinner in a few areas:
 
-- **Windows** — builds pass CI but the platform is otherwise untested in practice
+- **Windows** — release binaries are built, but CI does not run the test suite
+  there and the platform is untested in practice
 - **Performance** — no formal benchmarks against comparable tools (pixz, zip,
   plain tar.zst) have been run on realistic workloads
-- **Long-tail tar features** — sparse files, xattrs, device files, and ACLs are
-  delegated to the `tar | tarzan wrap` pipeline rather than handled internally;
-  that delegation path is not independently tested
+- **Long-tail tar features** — sparse entries are parsed and indexed as
+  `other` but not reconstructed; device nodes, FIFOs, and ACLs are preserved
+  in the tar stream but skipped by `tarzan extract`. Those cases are covered
+  only by hand-built fixtures, not by archives from GNU tar or bsdtar
 
 ---
 
