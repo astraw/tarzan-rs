@@ -65,10 +65,19 @@ enum Commands {
         #[arg(short = 'v', long = "verbose")]
         verbose: bool,
 
-        /// Sync the temporary archive file before rename and the containing
-        /// directory after rename. Slower, but improves durability across
-        /// crashes and some network/storage failure modes.
-        #[arg(long = "sync")]
+        /// Do not fsync the finished archive before renaming it into place
+        /// (nor its directory afterwards). By default `wrap` syncs so that a
+        /// power loss or kernel panic shortly after it returns cannot leave a
+        /// truncated archive at the output path. Skipping the sync saves a
+        /// few milliseconds per archive, which matters only when writing many
+        /// small archives or to slow storage. Has no effect when writing to
+        /// stdout.
+        #[arg(long = "no-sync")]
+        no_sync: bool,
+
+        /// Deprecated: syncing is now the default. Accepted and ignored so
+        /// existing invocations keep working.
+        #[arg(long = "sync", hide = true, conflicts_with = "no_sync")]
         sync: bool,
     },
 
@@ -287,7 +296,8 @@ fn main() -> Result<()> {
             disable_sha256,
             disable_md5,
             verbose,
-            sync,
+            no_sync,
+            sync: _,
         } => {
             let input = resolve_stream(input);
             let output = resolve_stream(file);
@@ -299,7 +309,7 @@ fn main() -> Result<()> {
                 disable_sha256,
                 disable_md5,
                 verbose,
-                sync,
+                sync: !no_sync,
             })
         }
         Commands::Info { file, json } => cmd_info::run(&file, json),

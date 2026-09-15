@@ -86,31 +86,46 @@ fn wrap_input_to_output_roundtrips() {
     assert_eq!(roundtrip, source_tar);
 }
 
+/// Syncing is the default; `--no-sync` opts out and the deprecated `--sync`
+/// is still accepted as a no-op. All three must produce the same archive.
 #[test]
-fn wrap_sync_input_to_output_roundtrips() {
+fn wrap_sync_flags_all_roundtrip() {
     let temp = tempdir().expect("failed to create tempdir");
     let tar_path = temp.path().join("input.tar");
-    let out_path = temp.path().join("output.tar.zst");
     create_tar_from_fixture(&tar_path);
+    let source_tar = fs::read(&tar_path).expect("failed to read source tar");
 
+    for (label, flags) in [
+        ("default", &[][..]),
+        ("--no-sync", &["--no-sync"][..]),
+        ("--sync (deprecated)", &["--sync"][..]),
+    ] {
+        let out_path = temp.path().join(format!("{}.tar.zst", flags.len()));
+        let status = Command::new(tarzan_bin())
+            .arg("wrap")
+            .args(flags)
+            .arg(&tar_path)
+            .arg("-f")
+            .arg(&out_path)
+            .status()
+            .expect("failed to run tarzan wrap");
+        assert!(status.success(), "tarzan wrap {label} exited non-zero");
+
+        let compressed = fs::read(&out_path).expect("failed to read compressed output");
+        let roundtrip = zstd::stream::decode_all(std::io::Cursor::new(compressed))
+            .expect("failed to decode zstd output");
+        assert_eq!(roundtrip, source_tar, "{label}");
+    }
+
+    // `--sync` and `--no-sync` together is a contradiction clap must reject.
     let status = Command::new(tarzan_bin())
-        .arg("wrap")
-        .arg("--sync")
+        .args(["wrap", "--sync", "--no-sync"])
         .arg(&tar_path)
         .arg("-f")
-        .arg(&out_path)
+        .arg(temp.path().join("conflict.tar.zst"))
         .status()
-        .expect("failed to run tarzan wrap --sync");
-    assert!(
-        status.success(),
-        "tarzan wrap --sync exited with non-zero status"
-    );
-
-    let source_tar = fs::read(&tar_path).expect("failed to read source tar");
-    let compressed = fs::read(&out_path).expect("failed to read compressed output");
-    let roundtrip = zstd::stream::decode_all(std::io::Cursor::new(compressed))
-        .expect("failed to decode zstd output");
-    assert_eq!(roundtrip, source_tar);
+        .expect("failed to run tarzan wrap");
+    assert!(!status.success(), "--sync with --no-sync must be rejected");
 }
 
 #[test]

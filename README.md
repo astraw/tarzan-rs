@@ -173,8 +173,8 @@ ssh user@host "tar -cf - /data" | tarzan wrap -f backup.tar.zst
 # Verbose: list each member to stderr as it is wrapped
 tar -cf - ./dir | tarzan wrap -v -f archive.tar.zst
 
-# fsync the finished archive and its directory before returning
-tar -cf - ./dir | tarzan wrap --sync -f archive.tar.zst
+# Skip the fsync of the finished archive (faster for many small archives)
+tar -cf - ./dir | tarzan wrap --no-sync -f archive.tar.zst
 ```
 
 For safety, `wrap` refuses to write the binary archive directly to a
@@ -184,10 +184,13 @@ the output, redirect to a file, or pass `-f`.
 By default `wrap` computes both `content_sha256` and `content_md5` for regular
 files. Use `--disable-sha256` and/or `--disable-md5` to skip one or both.
 
-`wrap` writes to a temporary file and renames it into place, so a failed or
-interrupted run never leaves a partial archive at the output path. `--sync`
-additionally fsyncs the file before the rename and the directory after it,
-for workflows where durability across a crash matters more than speed.
+`wrap` writes to a temporary file, fsyncs it, renames it into place, and
+fsyncs the containing directory. A failed or interrupted run therefore never
+leaves a partial archive at the output path, and a power loss shortly after
+`wrap` returns cannot leave a truncated one. The two fsyncs cost a few
+milliseconds per archive regardless of size; `--no-sync` skips them for
+workloads that write many small archives or target slow storage. Output to
+stdout is unaffected either way.
 
 ### Creating archives from files
 

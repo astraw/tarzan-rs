@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use tarzan::format::toc::TocMember;
-use tracing::info;
+use tracing::{info, warn};
 
 pub struct RunOptions<'a> {
     pub input: Option<&'a Path>,
@@ -143,7 +143,7 @@ where
             )
         })?;
         if sync {
-            sync_directory(parent)?;
+            sync_directory(parent);
         }
         Ok(())
     })();
@@ -180,17 +180,27 @@ fn create_temp_output_file(parent: &Path, file_name: &str) -> Result<(PathBuf, F
     )
 }
 
-fn sync_directory(path: &Path) -> Result<()> {
+/// Best-effort fsync of the directory holding the renamed archive, so the
+/// new directory entry is durable too.
+///
+/// The archive file itself has already been synced, so a failure here only
+/// weakens durability of the *name*, not the contents. Some filesystems
+/// (notably network mounts) refuse to fsync a directory; treat that as a
+/// warning rather than failing a wrap whose output is otherwise complete.
+fn sync_directory(path: &Path) {
     // Windows does not support opening a directory as a File for fsync;
     // directory entry durability is handled by the OS on rename.
     #[cfg(not(windows))]
     {
-        File::open(path)
-            .with_context(|| format!("opening directory {} for sync", path.display()))?
-            .sync_all()
-            .with_context(|| format!("syncing directory {}", path.display()))?;
+        let result = File::open(path).and_then(|dir| dir.sync_all());
+        if let Err(error) = result {
+            warn!(
+                directory = %path.display(),
+                %error,
+                "could not fsync output directory; archive contents are synced but the directory entry may not be"
+            );
+        }
     }
     #[cfg(windows)]
     let _ = path;
-    Ok(())
 }
