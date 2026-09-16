@@ -6,6 +6,12 @@
 # triggers on the tag that release-plz pushes.
 
 [workspace]
+# Publish only when a release PR is merged, never on an ordinary push to
+# main. Without this, `release-plz release` publishes any version in
+# Cargo.toml that is missing from crates.io, so a hand-edited version
+# bump ships the moment it lands on main (this is how 0.4.0 and 0.5.0
+# were released). Let the release PR bump the version instead.
+release_always = false
 # Automatically catch semver bumps.
 semver_check = true
 # Version is bumped from the crate's Conventional Commit history.
