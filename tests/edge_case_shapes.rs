@@ -905,6 +905,36 @@ fn trailing_pax_global_header_is_preserved() {
 }
 
 #[test]
+fn record_padded_tar_is_drained_to_eof_and_padding_survives() {
+    // GNU tar and bsdtar pad the archive to a multiple of the blocking factor
+    // (20 records = 10240 bytes by default) after the two end-of-archive zero
+    // blocks. `wrap` must read that padding through to EOF rather than stop at
+    // the end marker, and the round trip must reproduce it byte for byte.
+    const RECORD: usize = 10 * 1024;
+    let mut raw = single_file_tar("real.txt", 0o644, b"hello");
+    let unpadded = raw.len();
+    raw.resize(raw.len().div_ceil(RECORD) * RECORD, 0);
+    assert!(raw.len() > unpadded, "test must add real padding");
+    assert_eq!(raw.len() % RECORD, 0);
+
+    let mut input = Cursor::new(raw.as_slice());
+    let mut wrapped = Vec::new();
+    tarzan::wrap(&mut input, &mut wrapped, tarzan::WrapOptions::default())
+        .expect("wrap should succeed");
+    assert_eq!(
+        input.position() as usize,
+        raw.len(),
+        "wrap must consume the input through the trailing padding"
+    );
+
+    let decoded = zstd::stream::decode_all(Cursor::new(&wrapped)).unwrap();
+    assert_eq!(decoded, raw);
+    let toc = decode_toc(&wrapped);
+    assert_eq!(toc.members.len(), 1);
+    assert_eq!(toc.members[0].path, "real.txt");
+}
+
+#[test]
 fn conflicting_pax_size_and_header_size_is_rejected() {
     let raw = pax_size_mismatch_tar("bad.bin");
     let mut wrapped = Vec::new();
