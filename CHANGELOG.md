@@ -7,6 +7,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0](https://github.com/astraw/tarzan-rs/compare/v0.4.0...v0.5.0) - 2026-09-16
+
+### Added
+
+- require the TOC's tarzan_version to match the identity frame (Claude Fable 5.1)
+- [**breaking**] report what extract could not restore; add --strict (Claude Fable 5.1)
+- [**breaking**] sync wrapped archives by default; add --no-sync (Claude Fable 5.1)
+- [**breaking**] bump zstd to 0.14 and drop the pure-rust feature (Claude Fable 5.1)
+- make wrap checksums configurable and document policy (GPT-5.3-Codex)
+
+### Changed
+
+- changed! made WrapOptions fields private
+
+### Fixed
+
+- accept negative PAX mtimes; decline names the filesystem rejects (Claude Fable 5.1)
+- decline names Windows cannot create instead of failing mid-extract (Claude Fable 5.1)
+- decline a member whose name the filesystem folds onto one already written (Claude Fable 5.1)
+- warn instead of abort when an xattr cannot be restored (Claude Fable 5.1)
+- say XXHash64, not SHA-256, in the verify --quick help (Claude Fable 5.1)
+- pin tar-core to a hardened git revision (Claude Fable 5.1)
+- parse extended tar metadata with tar-core (GPT-5.4)
+
+### Other
+
+- spell the owner flags for GNU tar in the old-reader probe (Claude Fable 5.1)
+- state the compatibility contract and sync crate docs with README (Claude Fable 5.1)
+- probe forward compatibility without promising it (Claude Fable 5.1)
+- write tar names as bytes so host path rules do not apply (Claude Fable 5.1)
+- move artifact and python actions to their Node 24 majors (Claude Fable 5.1)
+- produce archives on every OS and consume them on every OS (Claude Fable 5.1)
+- hostile-but-valid tar corpus (Claude Fable 5.1)
+- pin list/info --json output with golden files (Claude Fable 5.1)
+- scan committed fixtures for host-specific facts (Claude Fable 5.1)
+- state the extract contract in the README (Claude Fable 5.1)
+- force a PAX header on the sub-second mtime fixture (Claude Fable 5.1)
+- make the compatibility fixtures host-neutral (Claude Fable 5.1)
+- describe the Windows job and drop the "untested" wording (Claude Fable 5.1)
+- keep archives from every published release readable (Claude Fable 5.1)
+- describe the zstd and tar compatibility contract and fix README drift (Claude Fable 5.1)
+- update Cargo.lock for zstd 0.14 (Claude Fable 5.1)
+- exercise host bsdtar default output on macOS (Claude Fable 5.1)
+- update Cargo.lock for the tar-core git pin (Claude Fable 5.1)
+- *(deps)* update parser dependency lockfile (GPT-5.4)
+- update Cargo.lock
+- update README
+- trivial refactoring
+- fix three errors in lib.rs and reader.rs docstrings (claude-sonnet-4-6)
+- fix three errors in --json field description (claude-sonnet-4-6)
+- mention MD5 sums in README JSON TOC section
+- add badges to readme
+- update dependencies
+
 ## [0.4.0](https://github.com/astraw/tarzan-rs/compare/v0.3.0...v0.4.0) - 2026-05-27
 
 ### Added
